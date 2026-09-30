@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>太阳系 1:1</title>
+<title>True Scale Solar System</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@700;900&display=swap">
@@ -64,7 +64,7 @@ h2 { font: 500 11px/1 var(--sans); letter-spacing: 0.14em; color: var(--dim); ma
 
 .brand { top: calc(14px + env(safe-area-inset-top, 0px)); left: 16px; pointer-events: none; text-shadow: 0 0 3px rgba(0,0,0,.9), 0 0 14px rgba(0,0,0,.7); }
 .brand h1 { margin: 0; font: 900 22px/1.1 var(--serif); letter-spacing: 0.03em; white-space: nowrap; }
-.brand h1 span { font: 500 18px var(--mono); color: var(--sol); margin-left: 4px; letter-spacing: 0; }
+.brand h1 span { font: 500 17px var(--mono); color: var(--sol); margin-right: 2px; letter-spacing: 0; }
 .brand p { margin: 2px 0 0; color: var(--dim); font-size: 12px; letter-spacing: 0.06em; }
 
 .clock { top: calc(12px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); text-align: center; text-shadow: 0 0 3px rgba(0,0,0,.9), 0 0 14px rgba(0,0,0,.7); max-width: 40vw; }
@@ -223,7 +223,7 @@ select { background: var(--panel-solid); border: 1px solid var(--rule-strong); b
 #loading { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding-inline: 24px; text-align: center; line-height: 1.8; background: var(--void); color: var(--dim); font: 14px var(--sans); letter-spacing: .1em; transition: opacity .6s; }
 #loading.gone { opacity: 0; pointer-events: none; }
 #loading b { display: block; font: 900 30px var(--serif); color: var(--ink); letter-spacing: .04em; margin-bottom: 8px; text-align: center; }
-#loading b span { font: 500 24px var(--mono); color: var(--sol); }
+#loading b span { font: 500 25px var(--mono); color: var(--sol); margin-right: 4px; }
 
 /* Immersive: only the scene (and its labels, if on) */
 #immExit { position: fixed; z-index: 6; top: calc(14px + env(safe-area-inset-top, 0px)); right: 16px; display: none; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 99px;
@@ -242,7 +242,7 @@ body.imm [data-chrome], body.imm #prograde { display: none !important; }
   .clock .time { font-size: 26px; }
 }
 @media (max-width: 760px) {
-  .brand h1 { font-size: 18px; } .brand h1 span { font-size: 15px; }
+  .brand h1 { font-size: 16px; white-space: normal; max-width: 9.5em; line-height: 1.15; } .brand h1 span { font-size: 14px; display: block; }
   .clock { left: auto; right: 16px; transform: none; text-align: right; max-width: 60vw; }
   .clock .time { font-size: 22px; }
   #clockMission { margin-right: 0; }
@@ -270,7 +270,7 @@ body.imm [data-chrome], body.imm #prograde { display: none !important; }
 <canvas id="scene" aria-label="太阳系三维视图" data-en-aria="3D view of the Solar System"></canvas>
 <div id="labels"></div>
 
-<header class="hud brand" data-chrome><h1 data-en="Solar System<span>1:1</span>">太阳系<span>1:1</span></h1><p data-en="True scale · live ephemeris">真实比例 · 实时星历</p></header>
+<header class="hud brand" data-chrome><h1><span>True Scale</span> Solar System</h1><p data-en="Live ephemeris · real distances">真实比例 · 实时星历</p></header>
 
 <div class="hud clock" data-chrome>
   <div class="date" id="clockDate">—</div>
@@ -386,7 +386,7 @@ body.imm [data-chrome], body.imm #prograde { display: none !important; }
 
 <button id="immExit"><svg class="ico" viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg><span data-en="Exit immersive · Esc">退出沉浸 · Esc</span></button>
 <div id="toast" role="status"></div>
-<div id="loading"><div data-en="<b>Solar System<span>1:1</span></b>Loading planets and stars…"><b>太阳系<span>1:1</span></b>正在载入行星与星空…</div></div>
+<div id="loading"><div data-en="<b><span>True Scale</span> Solar System</b>Loading planets and stars…"><b><span>True Scale</span> Solar System</b>正在载入行星与星空…</div></div>
 <script src="js/i18n.js"></script>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>

@@ -1,4 +1,4 @@
-# 太阳系 1:1
+# True Scale Solar System
 
 真实比例、实时星历的太阳系模拟器（纯前端，three.js）。
 

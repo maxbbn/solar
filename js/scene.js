@@ -6,8 +6,8 @@ const Scene3D = (() => {
   const probe = document.createElement('canvas');
   if (!window.THREE || !(probe.getContext('webgl2') || probe.getContext('webgl'))) {
     document.getElementById('loading').innerHTML = tr(
-      '<div><b>太阳系<span>1:1</span></b>这个浏览器没有可用的 WebGL，无法绘制三维场景。<br>请在电脑或手机上用最新版 Chrome、Edge、Safari 或 Firefox 打开，并确认已开启硬件加速。</div>',
-      '<div><b>Solar System<span>1:1</span></b>This browser has no WebGL available, so the 3D scene cannot be drawn.<br>Open it in a current Chrome, Edge, Safari or Firefox with hardware acceleration turned on.</div>');
+      '<div><b><span>True Scale</span> Solar System</b>这个浏览器没有可用的 WebGL，无法绘制三维场景。<br>请在电脑或手机上用最新版 Chrome、Edge、Safari 或 Firefox 打开，并确认已开启硬件加速。</div>',
+      '<div><b><span>True Scale</span> Solar System</b>This browser has no WebGL available, so the 3D scene cannot be drawn.<br>Open it in a current Chrome, Edge, Safari or Firefox with hardware acceleration turned on.</div>');
     throw new Error('WebGL unavailable');
   }
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true, powerPreference: 'high-performance' });

@@ -30,7 +30,7 @@ const I18N = (() => {
     applyStatic() {
       const en = api.lang === 'en';
       document.documentElement.lang = en ? 'en' : 'zh-CN';
-      document.title = en ? 'Solar System 1:1' : '太阳系 1:1';
+      document.title = 'True Scale Solar System';
       document.querySelectorAll('[data-en]').forEach(el => {
         if (el.dataset.zh == null) el.dataset.zh = el.innerHTML;
         el.innerHTML = en ? el.dataset.en : el.dataset.zh;
