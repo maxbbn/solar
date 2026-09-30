@@ -412,6 +412,18 @@
     if (e.code === 'Space') { e.preventDefault(); S.paused = !S.paused; refreshTimeUI(); }
     if (e.key === '.' || e.key === '>') stepRate(1);
     if (e.key === ',' || e.key === '<') stepRate(-1);
+    if (e.key === 'Escape') {
+      if (document.body.classList.contains('imm')) setImmersive(false);
+      else { closePops(); closePanel(); }
+    }
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const k = e.key.toLowerCase();
+    if (k === 'i') setImmersive(!document.body.classList.contains('imm'));
+    const t = TOGGLES.find(x => x[2] === k);
+    if (t) {
+      setToggle(t[1], !S.toggles[t[1]]);
+      toast(`${tr(...t[3])}：${S.toggles[t[1]] ? tr('开', 'on') : tr('关', 'off')}`, 1400);
+    }
   });
   Scene3D.labelLayer.addEventListener('click', e => {
     const b = e.target.closest('.lbl');
@@ -437,16 +449,19 @@
   const renderRates = () => { $('rates').innerHTML = RATES.map(r => `<button data-v="${r.v}">${tr(r.zh, r.en)}</button>`).join(''); };
   $('rates').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setRate(+b.dataset.v); });
   $('btnPlay').addEventListener('click', () => { S.paused = !S.paused; refreshTimeUI(); });
+  $('btnSlower').addEventListener('click', () => stepRate(-1));
+  $('btnFaster').addEventListener('click', () => stepRate(1));
   $('btnRev').addEventListener('click', () => { S.reverse = !S.reverse; S.autoPace = false; refreshTimeUI(); refreshMissionUI(); });
-  $('btnNow').addEventListener('click', () => { S.reverse = false; jumpTo(jdFromMs(Date.now())); setRate(1); toast(tr('已回到现在，时间以真实速度流逝', 'Back to now, with time running at real speed')); });
+  $('btnNow').addEventListener('click', () => { S.reverse = false; closePops(); jumpTo(jdFromMs(Date.now())); setRate(1); toast(tr('已回到现在，时间以真实速度流逝', 'Back to now, with time running at real speed')); });
   $('btnJump').addEventListener('click', () => {
     const v = $('jumpInput').value;
     if (!v) { toast(tr('先选择一个日期和时间', 'Pick a date and time first')); return; }
     const ms = new Date(v).getTime();
     if (!isFinite(ms)) return;
+    closePops();
     jumpTo(jdFromMs(ms), tr(`已跳转到 ${fmtDateTime(jdFromMs(ms))}`, `Jumped to ${fmtDateTime(jdFromMs(ms))}`));
   });
-  $('btnSolar').addEventListener('click', () => {
+  $('btnSolar').addEventListener('click', () => { closePops();
     const e = findSolarEclipse(S.jd);
     if (!e) return;
     S.reverse = false;
@@ -459,7 +474,7 @@
       `${e.type}: ${fmtDateTime(e.jd)} (${tzName}). You are standing on the centre line; in 70 minutes the Moon covers the Sun`), 7000);
     refreshTimeUI();
   });
-  $('btnLunar').addEventListener('click', () => {
+  $('btnLunar').addEventListener('click', () => { closePops();
     const e = findLunarEclipse(S.jd);
     if (!e) return;
     S.reverse = false;
@@ -481,19 +496,68 @@
   const CHIP_IDS = ['iss', 'sun', 'mercury', 'venus', 'earth', 'moon', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune', 'pluto', 'io', 'europa', 'ganymede', 'callisto', 'titan', 'phobos'];
   const renderChips = () => { $('bodies').innerHTML = CHIP_IDS.map(id => `<button class="chip" data-id="${id}"><i style="background:${id === 'iss' ? '#e8e2d0' : BODY[id].color}"></i>${id === 'iss' ? tr('空间站', 'ISS') : BODY[id].name}</button>`).join(''); };
   $('bodies').addEventListener('click', e => { const b = e.target.closest('.chip'); if (b) { focusBody(b.dataset.id); closeSheet(); } });
-  $('tLabels').addEventListener('change', e => { S.toggles.labels = e.target.checked; });
-  $('tOrbits').addEventListener('change', e => { S.toggles.orbits = e.target.checked; });
-  $('tConst').addEventListener('change', e => { S.toggles.constellations = e.target.checked; });
 
-  // Mobile sheets
-  $('tabs').addEventListener('click', e => {
-    const b = e.target.closest('button');
-    if (!b) return;
-    const cur = document.body.dataset.sheet;
-    document.body.dataset.sheet = cur === b.dataset.tab ? 'none' : b.dataset.tab;
-    [...$('tabs').children].forEach(x => x.classList.toggle('on', x.dataset.tab === document.body.dataset.sheet));
+  // ─── Panels: one drawer (views / bodies / mission / info on phones) at a time ───
+  function openPanel(name) {
+    const cur = document.body.dataset.panel;
+    document.body.dataset.panel = cur === name ? 'none' : name;
+    [...$('rail').children].forEach(x => x.classList.toggle('on', x.dataset.panel === document.body.dataset.panel));
+    closePops();
+    if (document.body.dataset.panel === 'mission' && S.plan.pork) requestAnimationFrame(drawPorkchop);
+  }
+  function closePanel() {
+    document.body.dataset.panel = 'none';
+    [...$('rail').children].forEach(x => x.classList.remove('on'));
+  }
+  const closeSheet = closePanel;
+  $('rail').addEventListener('click', e => { const b = e.target.closest('[data-panel]'); if (b) openPanel(b.dataset.panel); });
+  document.addEventListener('click', e => { if (e.target.closest('[data-close]')) closePanel(); });
+
+  // Popovers (time menu, settings): close on outside click
+  const POPS = [['timePop', 'btnTime'], ['settingsPop', 'btnSettings']];
+  function togglePop(id) {
+    const el = $(id), show = el.hidden;
+    closePops();
+    el.hidden = !show;
+    const btn = POPS.find(p => p[0] === id)[1];
+    $(btn).classList.toggle('on', show);
+  }
+  function closePops() { for (const [id, btn] of POPS) { $(id).hidden = true; $(btn).classList.remove('on'); } }
+  $('btnTime').addEventListener('click', e => { e.stopPropagation(); togglePop('timePop'); });
+  $('btnSettings').addEventListener('click', e => { e.stopPropagation(); togglePop('settingsPop'); });
+  document.addEventListener('pointerdown', e => {
+    if (!e.target.closest('.pop') && !e.target.closest('#btnTime') && !e.target.closest('#btnSettings')) closePops();
   });
-  function closeSheet() { if (window.innerWidth <= 760) { document.body.dataset.sheet = 'none'; [...$('tabs').children].forEach(x => x.classList.remove('on')); } }
+
+  // Layer toggles: always-visible icon buttons
+  const TOGGLES = [['tLabels', 'labels', 'l', ['标签', 'Labels']], ['tOrbits', 'orbits', 'o', ['轨道与航线', 'Orbits & paths']], ['tConst', 'constellations', 'c', ['星座', 'Constellations']]];
+  function setToggle(key, on) {
+    S.toggles[key] = on;
+    const t = TOGGLES.find(x => x[1] === key);
+    $(t[0]).setAttribute('aria-pressed', String(on));
+    return t;
+  }
+  for (const [id, key] of TOGGLES) $(id).addEventListener('click', () => setToggle(key, !S.toggles[key]));
+
+  // Immersive mode: nothing but the scene; controls reappear briefly when the pointer moves
+  let stirTimer;
+  function setImmersive(on) {
+    document.body.classList.toggle('imm', on);
+    closePops();
+    if (on) {
+      toast(tr('沉浸模式：按 Esc 退出。L / O / C 仍可切换标签、轨道、星座', 'Immersive mode: press Esc to leave. L / O / C still toggle labels, orbits, constellations'), 3500);
+      try { const r = document.documentElement.requestFullscreen && document.documentElement.requestFullscreen(); if (r && r.catch) r.catch(() => {}); } catch (err) { /* fullscreen not allowed here */ }
+    } else if (document.fullscreenElement) { try { document.exitFullscreen(); } catch (err) { /* ignore */ } }
+  }
+  $('btnImm').addEventListener('click', () => setImmersive(true));
+  $('immExit').addEventListener('click', () => setImmersive(false));
+  document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && document.body.classList.contains('imm')) setImmersive(false); });
+  window.addEventListener('pointermove', () => {
+    if (!document.body.classList.contains('imm')) return;
+    document.body.classList.add('stir');
+    clearTimeout(stirTimer);
+    stirTimer = setTimeout(() => document.body.classList.remove('stir'), 1800);
+  });
 
   // ─── Surface HUD ──────────────────────────────────────────────────────────
   const FOV_MIN = Math.log(0.1), FOV_MAX = Math.log(100);
@@ -541,6 +605,7 @@
     return S.orbit.target;
   }
   let infoKey = '';
+  const setTitle = (name, kind) => { $('infoTitle').innerHTML = `<b>${name}</b><span class="kind">${kind}</span>`; };
   const setHtml = (el, html) => { if (el && el._html !== html) { el.innerHTML = html; el._html = html; } };
   function renderInfo(pos, cam) {
     const id = infoBodyId(), el = $('info');
@@ -548,19 +613,19 @@
     if (key !== infoKey) {
       infoKey = key;
       if (id === 'iss') {
-        el.innerHTML = `<div class="info-head"><h3>${tr('国际空间站', 'International Space Station')}</h3><span class="kind">${tr('空间站', 'Space station')}</span></div>
-          <dl class="rows" id="infoRows"></dl>
+        setTitle(tr('国际空间站', 'International Space Station'), tr('空间站', 'Space station'));
+        el.innerHTML = `<dl class="rows" id="infoRows"></dl>
           <p class="fact">${tr('每天绕地球约 15.5 圈，宇航员一天能看到 16 次日出和日落。以这个速度，从北京飞到上海只要 2 分 20 秒。', 'It circles Earth about 15.5 times a day, so the crew sees 16 sunrises and sunsets daily. At this speed, Beijing to Shanghai takes 2 min 20 s.')}</p>
           <div class="btn-row"><button class="btn" data-act="cupola">${tr('舷窗视角', 'Cupola view')}</button><button class="btn" data-act="focus" data-id="iss">${tr('跟随空间站', 'Follow the ISS')}</button></div>
           <p class="note-sm">${tr(`轨道数据：${fmtDate(ISS.epoch)} 的真实两行根数（TLE）。离这个日期越远，位置越不准。`, `Orbit: a real TLE from ${fmtDate(ISS.epoch)}. The further from that date, the less exact the position.`)}</p>
           <div id="pulseBox"></div>`;
       } else if (id === 'craft') {
-        el.innerHTML = `<div class="info-head"><h3>${S.mission ? S.mission.craft : tr('探测器', 'Probe')}</h3><span class="kind">${tr('航天器', 'Spacecraft')}</span></div>
-          <p class="fact" style="border:0;padding:0;margin:0">${tr('真实的火箭只有约 40 米长。把镜头拉远，看看它在太空中有多渺小。', 'The real rocket is only about 40 m long. Zoom out to see how tiny it is in space.')}</p><div id="pulseBox"></div>`;
+        setTitle(S.mission ? S.mission.craft : tr('探测器', 'Probe'), tr('航天器', 'Spacecraft'));
+        el.innerHTML = `<p class="fact" style="border:0;padding:0;margin:0">${tr('真实的火箭只有约 40 米长。把镜头拉远，看看它在太空中有多渺小。', 'The real rocket is only about 40 m long. Zoom out to see how tiny it is in space.')}</p><div id="pulseBox"></div>`;
       } else {
         const b = BODY[id];
-        el.innerHTML = `<div class="info-head"><h3>${b.name}</h3><span class="kind">${b.kind}</span></div>
-          <dl class="rows" id="infoRows"></dl><p class="fact">${b.fact || ''}</p>
+        setTitle(b.name, b.kind);
+        el.innerHTML = `<dl class="rows" id="infoRows"></dl><p class="fact">${b.fact || ''}</p>
           <div class="btn-row"><button class="btn" data-act="pulse" data-id="${id}" title="${tr('观察光速：光从这里出发，要多久才能到达其他行星', 'Watch the speed of light: how long light from here takes to reach other planets')}">${tr(`从${b.name}发出一束光`, `Send light from ${b.name}`)}</button><button class="btn" data-act="focus" data-id="${id}" title="${tr(`镜头飞到${b.name}近处`, `Fly the camera to ${b.name}`)}">${tr(`飞到${b.name}近处`, `Fly to ${b.name}`)}</button></div>
           <p class="note-sm">${tr('光束：看光以每秒 30 万公里的速度要多久才能走到别的行星。', 'Light beam: see how long light, at 300,000 km per second, takes to reach the other planets.')}</p>
           <div id="pulseBox"></div>`;
@@ -580,6 +645,7 @@
         [tr('尺寸', 'Size'), tr('109 × 73 米，约 420 吨', '109 × 73 m, about 420 t')],
         [tr('离镜头', 'From camera'), fmtKm(dCam)],
       ].map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join(''));
+      setHtml($('infoSub'), `${fmtKm(V3.len(f.r) - BODY.earth.radius)} · ${V3.len(ISS.velGeo(S.jd)).toFixed(2)} km/s · ${lit ? tr('阳光下', 'sunlit') : tr('夜晚', 'night')}`);
     } else if (id !== 'craft') {
       const b = BODY[id], P = pos[id];
       const dSun = V3.len(V3.sub(P, pos.sun)), dEarth = V3.len(V3.sub(P, pos.earth)), dCam = V3.len(V3.sub(P, cam.C));
@@ -597,6 +663,11 @@
       else if (b.orbit) rows.push([tr('公转', 'Orbit'), days(b.orbit[1].toFixed(2))]);
       if (b.day) rows.push([tr('一天', 'Day'), b.day]);
       setHtml($('infoRows'), rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join(''));
+      setHtml($('infoSub'), id === 'earth' ? `${tr('离镜头', 'Camera')} ${fmtKm(Math.max(0, dCam - b.radius))}`
+        : `${tr('距地球', 'From Earth')} ${fmtKm(dEarth)} · ${tr('光走', 'light')} ${fmtDur(dEarth / C_KMS)}`);
+    } else {
+      const m = S.mission, ph = m && m.phaseAt(S.jd);
+      setHtml($('infoSub'), ph ? ph.label : tr('发射准备', 'Pre-launch'));
     }
     const box = $('pulseBox');
     if (!S.pulses.length) setHtml(box, '');
@@ -622,6 +693,11 @@
       : tr(`按这个速度，光到地球大约要 ${fmtDur(dEarth / C_KMS / 60)}（真实时间 ${fmtDur(dEarth / C_KMS)}）`, `at this speed light reaches Earth in about ${fmtDur(dEarth / C_KMS / 60)} (really ${fmtDur(dEarth / C_KMS)})`);
     toast(tr(`一束光从${BODY[id].name}出发了（那个不断变大的球面）。时间已调成 1分/秒：${hint}`, `Light has left ${BODY[id].name} (the growing sphere). Time now runs at 1 min/s: ${hint}`), 7000);
   }
+  $('infoToggle').addEventListener('click', () => {
+    const open = document.body.dataset.info !== 'open';
+    document.body.dataset.info = open ? 'open' : 'closed';
+    $('infoToggle').setAttribute('aria-expanded', String(open));
+  });
   $('info').addEventListener('click', e => {
     const b = e.target.closest('button');
     if (!b) return;
@@ -661,6 +737,7 @@
     if (!m) { toast(tr('这个方案算不出可行轨道，换个日期试试', 'No workable trajectory for this plan. Try another date.')); return; }
     S.mission = m;
     Scene3D.setMission(m);
+    closePanel();
     S.reverse = false;
     jumpTo(m.tLaunch - 12 / DAY);
     S.paused = false; S.autoPace = true; S.rate = 1;
@@ -700,6 +777,8 @@
     mark(pk.best, 'rgba(255,255,255,0.6)');
     mark(S.plan.pick, '#fff');
   }
+  const CLOSE_BTN = () => `<button class="xbtn" data-close title="${tr('关闭', 'Close')}"><svg class="ico" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>`;
+  const drawerHead = title => `<div class="drawer-head"><h2>${title}</h2>${CLOSE_BTN()}</div>`;
   function refreshMissionUI() {
     const el = $('mission');
     if (S.mission) { renderMissionHud(); return; }
@@ -730,7 +809,7 @@
             : `Leave now: Δv <span class="num">${p.now ? p.now.dv.toFixed(2) : '—'}</span> km/s · <span class="num">${p.now ? p.now.tof : '—'}</span>-day flight`}</div>
         <div class="btn-row"><button class="btn primary" data-act="launchPick">${pick === b ? tr('跳到最佳窗口发射', 'Launch at the best window') : tr('按所选方案发射', 'Launch the selected plan')}</button><button class="btn" data-act="launchNow">${tr('立即发射', 'Launch now')}</button></div>`;
     } else body = `<div class="plan note">${tr('正在计算发射窗口…', 'Working out launch windows…')}</div>`;
-    el.innerHTML = `<h2>${tr('发射任务', 'Launch')}</h2>
+    el.innerHTML = `${drawerHead(tr('发射任务', 'Launch'))}
       <div class="seg" role="group" aria-label="${tr('目的地', 'Destination')}">${TARGETS.map(id => `<button data-target="${id}" class="${p.target === id ? 'on' : ''}">${BODY[id].name}</button>`).join('')}</div>
       <label class="field" for="siteLaunch">${tr('发射场', 'Launch site')} <select id="siteLaunch">${LAUNCH_SITES.map((s, i) => `<option value="${i}" ${s === p.site ? 'selected' : ''}>${s.name}</option>`).join('')}</select></label>
       ${body}`;
@@ -783,7 +862,7 @@
     const m = S.mission, el = $('mission');
     if (missionHudBuilt !== m) {
       missionHudBuilt = m;
-      el.innerHTML = `<h2>${m.name} · ${tr(`${m.site.name}发射`, `from ${m.site.name}`)}</h2>
+      el.innerHTML = `${drawerHead(`${m.name} · ${tr(`${m.site.name}发射`, `from ${m.site.name}`)}`)}
         <div class="met" id="met"></div>
         <div class="phase" id="phase"></div>
         <dl class="rows" id="mstats"></dl>
@@ -880,6 +959,13 @@
     $('clockTime').textContent = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
     $('clockRate').textContent = S.paused ? tr('已暂停', 'Paused') : (S.autoPace && S.mission ? tr('自动 · ', 'Auto · ') : '') + rateLabel(S.rate * (S.reverse ? -1 : 1));
     $('clockBadge').hidden = S.jd >= JD_OK0 && S.jd <= JD_OK1;
+    const cm = $('clockMission'), m = S.mission;
+    cm.hidden = !m;
+    if (m) {
+      const t = S.jd - m.tLaunch, s = Math.abs(t) * DAY, ph = m.phaseAt(S.jd);
+      const met = `T${t < 0 ? '−' : '+'}${s >= 86400 ? Math.floor(s / 86400) + tr('天 ', 'd ') : ''}${pad((s % 86400) / 3600)}:${pad((s % 3600) / 60)}:${pad(s % 60)}`;
+      cm.textContent = `${met} · ${ph ? ph.label : tr('发射准备', 'Pre-launch')}`;
+    }
   }
   function updateScale(cam) {
     if (S.mode !== 'orbit') return;
@@ -979,10 +1065,12 @@
   }
   const syncLangSel = () => { $('langSel').value = I18N.pref; };
   $('langSel').addEventListener('change', e => I18N.setPref(e.target.value));
+  $('clockMission').addEventListener('click', () => { if (document.body.dataset.panel !== 'mission') openPanel('mission'); });
   I18N.onChange(() => {
     renderLists();
     infoKey = '';
     missionHudBuilt = null;
+    for (const [id, key] of TOGGLES) setToggle(key, S.toggles[key]);
     refreshMissionUI();
     renderCockpitHud();
     Scene3D.relabel();
