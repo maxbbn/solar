@@ -17,11 +17,12 @@ const Scene3D = (() => {
   const camera = new THREE.PerspectiveCamera(50, 1, 1e-5, 1e13);
   const loader = new THREE.TextureLoader();
   const maxAniso = renderer.capabilities.getMaxAnisotropy();
-  const tex = key => {
+  const tex = (key, wrap) => {
     const src = window.TEX && window.TEX[key];
     if (!src) return null;
     const t = loader.load(src);
     t.anisotropy = Math.min(8, maxAniso);
+    if (wrap) t.wrapS = THREE.RepeatWrapping;
     return t;
   };
   const LOG_V = '#include <common>\n#include <logdepthbuf_pars_vertex>\n';
@@ -30,14 +31,19 @@ const Scene3D = (() => {
 
   // ─── Shared uniforms ──────────────────────────────────────────────────────
   const SUN_U = { value: new THREE.Vector3() };
+  const PXRAD_U = { value: 1e-3 }; // radians per screen pixel, sets how fine procedural detail may go
 
   const PLANET_VS = LOG_V + `
-    varying vec2 vUv; varying vec3 vN; varying vec3 vP;
+    uniform vec3 sunPos;
+    varying vec2 vUv; varying vec3 vN; varying vec3 vP; varying vec3 vO; varying vec3 vLo;
     void main() {
       vUv = uv;
+      vO = position;
       vec4 wp = modelMatrix * vec4(position, 1.0);
       vP = wp.xyz;
       vN = normalize(mat3(modelMatrix) * normal);
+      mat3 rot = mat3(normalize(modelMatrix[0].xyz), normalize(modelMatrix[1].xyz), normalize(modelMatrix[2].xyz));
+      vLo = normalize(sunPos - wp.xyz) * rot; // sun direction in the body frame
       gl_Position = projectionMatrix * viewMatrix * wp;
       #include <logdepthbuf_vertex>
     }`;
@@ -58,28 +64,101 @@ const Scene3D = (() => {
       float a3 = 0.5 * sqrt(max((-d + rs + ro) * (d + rs - ro) * (d - rs + ro) * (d + rs + ro), 0.0));
       return clamp(1.0 - (a1 + a2 - a3) / (PI * rs * rs), 0.0, 1.0);
     }`;
-  const PLANET_FS = LOG_F + ECLIPSE_GLSL + `
+  // Earth close up: the 2k maps are ~20 km per texel, so below a few thousand km the clouds,
+  // land and sea get band-limited procedural detail (octaves fade in only once a pixel can
+  // resolve them), cloud shadows and sun glint on water.
+  const EARTH_DETAIL_GLSL = `
+    #define EARTH_R ${BODY.earth.radius.toFixed(1)}
+    #define CLOUD_H 12.0
+    uniform float pxRad; uniform float earthFx; uniform sampler2D cloudMap; uniform float cloudRot;
+    float hash13(vec3 p) { p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
+    float vnoise(vec3 p) {
+      vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(mix(hash13(i), hash13(i + vec3(1, 0, 0)), f.x), mix(hash13(i + vec3(0, 1, 0)), hash13(i + vec3(1, 1, 0)), f.x), f.y),
+                 mix(mix(hash13(i + vec3(0, 0, 1)), hash13(i + vec3(1, 0, 1)), f.x), mix(hash13(i + vec3(0, 1, 1)), hash13(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+    }
+    // o: unit vector in the body frame; lam: largest wavelength in km; foot: km per pixel
+    float fbm(vec3 o, float lam, float foot) {
+      const mat3 R3 = mat3(0.00, 0.80, 0.60, -0.80, 0.36, -0.48, -0.60, -0.48, 0.64);
+      vec3 p = o * (EARTH_R / lam);
+      float s = 0.0, a = 0.5;
+      for (int i = 0; i < 7; i++) {
+        float k = clamp(lam / foot / 3.0 - 1.0, 0.0, 1.0); // fades in between 3 and 6 pixels per wavelength
+        if (k <= 0.0) break;
+        s += a * k * (vnoise(p) - 0.5);
+        p = R3 * p * 2.03; lam /= 2.03; a *= 0.5;
+      }
+      return s;
+    }
+    // Cloud opacity at uv / cloud-frame unit vector o; w = how much detail replaces the blurry texture
+    float cloudCover(vec2 uv, vec3 o, float foot, float w, out float n) {
+      n = 0.0;
+      if (w > 0.0) {
+        vec3 q = o * (EARTH_R / 90.0);
+        uv += (vec2(vnoise(q), vnoise(q + 19.7)) - 0.5) * w * vec2(3.0 / 2048.0, 3.0 / 1024.0);
+        n = fbm(o, 40.0, foot);
+      }
+      float d = texture2D(cloudMap, uv).r + n * 0.9 * w;
+      return smoothstep(mix(0.08, 0.2, w), mix(0.9, 0.6, w), d) * 0.92;
+    }
+  `;
+  const PLANET_FS = LOG_F + ECLIPSE_GLSL + EARTH_DETAIL_GLSL + `
     uniform sampler2D map; uniform float hasMap; uniform vec3 baseColor;
     uniform sampler2D night; uniform float hasNight;
     uniform vec4 occ[4]; uniform float redden; uniform float ambient; uniform float cloudMode;
-    varying vec2 vUv; varying vec3 vN; varying vec3 vP;
+    varying vec2 vUv; varying vec3 vN; varying vec3 vP; varying vec3 vO; varying vec3 vLo;
     void main() {
       #include <logdepthbuf_fragment>
       vec4 tc = hasMap > 0.5 ? texture2D(map, vUv) : vec4(baseColor, 1.0);
       vec3 N = normalize(vN);
       vec3 L = normalize(sunPos - vP);
+      vec3 V = normalize(-vP);
       float ndl = dot(N, L);
       float diff = max(ndl, 0.0);
       float vis = 1.0;
       for (int i = 0; i < 4; i++) if (occ[i].w > 0.0) vis *= sunVisF(vP, occ[i].xyz, occ[i].w);
-      vec3 col = tc.rgb * (diff * vis + ambient);
+      vec3 o = normalize(vO);
+      float foot = length(vP) * pxRad / max(abs(dot(N, V)), 0.25);
+      float w = earthFx > 0.5 ? 1.0 - smoothstep(4.0, 16.0, foot) : 0.0;
+      float shade = 1.0, water = 0.0;
+      if (earthFx > 0.5) {
+        // The daymap paints all water one flat blue, so colour alone gives a clean mask
+        water = smoothstep(0.12, 0.25, tc.b - tc.r) * smoothstep(0.03, 0.09, tc.b - tc.g);
+        if (w > 0.0 && water < 0.99) tc.rgb *= 1.0 + fbm(o + 0.37, 20.0, foot) * 0.6 * w * (1.0 - water);
+        if (ndl > -0.1) {
+          // Cloud shadow: follow the sun ray up to the cloud deck, then look it up in the cloud frame
+          vec3 Lo = normalize(vLo);
+          vec3 s = (Lo - o * dot(o, Lo)) * (CLOUD_H / EARTH_R / max(dot(o, Lo), 0.12));
+          vec3 e = vec3(-o.y, o.x, 0.0); float cl = max(length(e), 1e-4); e /= cl;
+          vec2 cuv = vUv + vec2(dot(s, e) / max(cl, 0.05) / (2.0 * PI) - cloudRot / (2.0 * PI), dot(s, cross(o, e)) / PI);
+          vec3 os = normalize(o + s); float cr = cos(cloudRot), sr = sin(cloudRot);
+          float n;
+          shade = 1.0 - 0.55 * cloudCover(cuv, vec3(cr * os.x + sr * os.y, -sr * os.x + cr * os.y, os.z), foot, w, n);
+        }
+      }
+      vec3 col = tc.rgb * (diff * vis * shade + ambient);
       col += tc.rgb * vec3(0.62, 0.2, 0.08) * redden * (1.0 - vis) * max(ndl, 0.0);
+      if (water > 0.01 && ndl > -0.05) {
+        // Sun glint: Beckmann microfacets, with patchy roughness (wind streaks, slicks) up close
+        float rough = 1.0, kw = clamp(8.0 / foot / 3.0 - 1.0, 0.0, 1.0);
+        if (kw > 0.0) rough += (vnoise(o * (EARTH_R / 8.0)) - 0.5) * 1.2 * kw + (vnoise(o * (EARTH_R / 2.5) + 5.1) - 0.5) * 0.35 * kw;
+        vec3 Hv = normalize(L + V);
+        float nh = max(dot(N, Hv), 1e-3), nh2 = nh * nh, m2 = 0.03 * max(rough, 0.3);
+        float D = exp((nh2 - 1.0) / (nh2 * m2)) / (PI * m2 * nh2 * nh2);
+        float F = 0.02 + 0.98 * pow(1.0 - max(dot(V, Hv), 0.0), 5.0);
+        float spec = min(PI * D * F / (4.0 * max(dot(N, V), 0.08)) * 2.5, 3.0);
+        col += vec3(1.0, 0.95, 0.85) * spec * water * vis * shade * smoothstep(-0.05, 0.08, ndl);
+      }
       if (hasNight > 0.5) {
         float nf = smoothstep(0.08, -0.12, ndl) + (1.0 - vis) * step(0.0, ndl) * 0.7;
         col += texture2D(night, vUv).rgb * vec3(1.0, 0.82, 0.55) * 0.85 * clamp(nf, 0.0, 1.0);
       }
       float alpha = 1.0;
-      if (cloudMode > 0.5) { alpha = smoothstep(0.08, 0.9, tc.r) * 0.92; col = vec3(1.0) * (diff * vis + ambient * 0.5); }
+      if (cloudMode > 0.5) {
+        float cw = 1.0 - smoothstep(4.0, 16.0, foot), n;
+        alpha = cloudCover(vUv, o, foot, cw, n);
+        col = vec3(1.0) * (diff * vis + ambient * 0.5) * (1.0 + n * 0.7 * cw);
+      }
       gl_FragColor = vec4(col, alpha);
     }`;
 
@@ -91,6 +170,7 @@ const Scene3D = (() => {
         sunPos: SUN_U, sunR: { value: BODY.sun.radius },
         occ: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) },
         redden: { value: o.redden || 0 }, ambient: { value: o.ambient ?? 0.01 }, cloudMode: { value: o.cloud ? 1 : 0 },
+        pxRad: PXRAD_U, earthFx: { value: o.earth ? 1 : 0 }, cloudMap: { value: o.cloudMap || null }, cloudRot: { value: 0 },
       },
       vertexShader: PLANET_VS, fragmentShader: PLANET_FS,
       transparent: !!o.cloud, depthWrite: !o.cloud,
@@ -108,6 +188,7 @@ const Scene3D = (() => {
   const OCCLUDERS = { earth: ['moon'], moon: ['earth'], jupiter: ['io', 'europa', 'ganymede', 'callisto'], mars: ['phobos', 'deimos'],
     io: ['jupiter'], europa: ['jupiter'], ganymede: ['jupiter'], callisto: ['jupiter'], titan: ['saturn'], phobos: ['mars'], deimos: ['mars'] };
 
+  const cloudTex = tex('earth_clouds', true);
   for (const b of BODIES) {
     const g = new THREE.Group();
     let mesh;
@@ -117,6 +198,7 @@ const Scene3D = (() => {
       const map = b.tex ? tex(b.tex) : null;
       mesh = new THREE.Mesh(b.tex ? sphereGeo : smallSphere, planetMaterial({
         map, color: b.color, night: b.id === 'earth' ? tex('earth_nightmap') : null,
+        earth: b.id === 'earth', cloudMap: b.id === 'earth' ? cloudTex : null,
         redden: b.id === 'moon' ? 1 : 0, ambient: b.id === 'moon' ? 0.018 : 0.008,
       }));
     }
@@ -125,7 +207,7 @@ const Scene3D = (() => {
     meshes[b.id] = { group: g, body: mesh, b };
   }
   // Earth: clouds + atmosphere rim
-  const clouds = new THREE.Mesh(sphereGeo, planetMaterial({ map: tex('earth_clouds'), cloud: true, ambient: 0.02 }));
+  const clouds = new THREE.Mesh(sphereGeo, planetMaterial({ map: cloudTex, cloudMap: cloudTex, cloud: true, ambient: 0.02 }));
   clouds.scale.setScalar(1 + 12 / BODY.earth.radius);
   meshes.earth.group.add(clouds);
   meshes.earth.clouds = clouds;
@@ -528,6 +610,7 @@ const Scene3D = (() => {
     if (Math.abs(camera.fov - fov) > 1e-6) { camera.fov = fov; camera.updateProjectionMatrix(); }
     camera.updateMatrixWorld();
     const pxPerRad = H / 2 / Math.tan(fov * DEG / 2);
+    PXRAD_U.value = 1 / pxPerRad;
 
     const sunRel = rel(pos.sun);
     SUN_U.value.set(sunRel[0], sunRel[1], sunRel[2]);
@@ -545,7 +628,8 @@ const Scene3D = (() => {
       if (m.atmo) m.atmo.scale.setScalar(b.radius * (id === 'earth' ? 1.022 : id === 'venus' ? 1.03 : 1.012));
       if (m.clouds) {
         m.clouds.scale.setScalar(b.radius + 12);
-        m.clouds.rotation.z = (jd % 3650) * 0.35 * DEG;
+        m.clouds.rotation.z = ((jd % 3650) * 0.35 % 360) * DEG;
+        m.body.material.uniforms.cloudRot.value = m.clouds.rotation.z;
       }
       const occ = OCCLUDERS[id];
       if (occ) {
