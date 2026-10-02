@@ -31,9 +31,10 @@ Deep links: `#onEarth` `#onMoon` `#onMars` `#inner` `#outer` `#saturnBack` `#ecl
 - `js/iss.js` ISS orbit, pass predictions and model (to update the orbit, replace `ISS_TLE` at the top of the file; get it from celestrak.org)
 - `js/astro.js` ephemerides, body data, eclipse search
 - `js/missions.js` orbital mechanics (universal-variable Kepler propagation, Lambert, mission design)
+- `js/tiles.js` streams NASA GIBS imagery (Blue Marble, VIIRS night lights, land/water mask) around the camera when it is close to Earth; offline it falls back to the built-in maps
 - `js/scene.js` rendering (floating origin + logarithmic depth buffer, for true scale from meters to AU)
 - `js/app.js` camera, time, UI
 - `assets/` packed textures and star catalog (generated from `tex_src/` by `tools/build_data.py`)
 
-Textures © Solar System Scope, CC BY 4.0; star catalog and constellation lines from d3-celestial (BSD-3).
+Textures © Solar System Scope, CC BY 4.0; close-up Earth imagery from NASA GIBS (Blue Marble Next Generation, VIIRS Black Marble) and OpenStreetMap land/water data (© OpenStreetMap contributors, ODbL); star catalog and constellation lines from d3-celestial (BSD-3).
  

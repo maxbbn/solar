@@ -31,8 +31,9 @@ python3 -m http.server 8765   # その後 http://localhost:8765 を開く
 - `js/iss.js` ISS の軌道・通過予報・モデル（軌道を更新するにはファイル先頭の `ISS_TLE` を置き換える。celestrak.org から取得可能）
 - `js/astro.js` 天体暦、天体データ、日食・月食の検索
 - `js/missions.js` 軌道力学（普遍変数によるケプラー伝播、ランベルト問題、ミッション設計）
+- `js/tiles.js` カメラが地球に近づくと、周囲の衛星画像を NASA GIBS から逐次読み込む（Blue Marble、VIIRS 夜間光、海陸マスク）。オフラインでは内蔵テクスチャに戻る
 - `js/scene.js` レンダリング（浮動原点 + 対数深度バッファで、メートルから天文単位までの実寸スケールを実現）
 - `js/app.js` カメラ、時間、UI
 - `assets/` パック済みのテクスチャと星表（`tools/build_data.py` により `tex_src/` から生成）
 
-テクスチャ © Solar System Scope、CC BY 4.0。星表と星座線は d3-celestial（BSD-3）より。
+テクスチャ © Solar System Scope、CC BY 4.0。地球の近景画像は NASA GIBS（Blue Marble Next Generation、VIIRS Black Marble）と OpenStreetMap の海陸データ（© OpenStreetMap contributors、ODbL）より。星表と星座線は d3-celestial（BSD-3）より。

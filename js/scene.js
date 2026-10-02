@@ -32,6 +32,8 @@ const Scene3D = (() => {
   // ─── Shared uniforms ──────────────────────────────────────────────────────
   const SUN_U = { value: new THREE.Vector3() };
   const PXRAD_U = { value: 1e-3 }; // radians per screen pixel, sets how fine procedural detail may go
+  const MOON_U = { value: new THREE.Vector4() };
+  const earthTiles = EarthTiles(renderer);
 
   const PLANET_VS = LOG_V + `
     uniform vec3 sunPos;
@@ -101,6 +103,20 @@ const Scene3D = (() => {
       float d = texture2D(cloudMap, uv).r + n * 0.9 * w;
       return smoothstep(mix(0.08, 0.2, w), mix(0.9, 0.6, w), d) * 0.92;
     }
+    // Streamed imagery (js/tiles.js): a 4×4-tile window per zoom level, stored as a ring.
+    // win = (x0, y0, tiles around the globe, opacity); ll = lon/lat in degrees; e = blend weight
+    uniform sampler2D tD0; uniform sampler2D tD1; uniform sampler2D tA0; uniform sampler2D tA1;
+    uniform vec4 wD0; uniform vec4 wD1; uniform vec4 wA0; uniform vec4 wA1;
+    vec4 clip(sampler2D t, vec4 win, vec2 ll, out float e) {
+      float span = 360.0 / win.z;
+      float dx = mod((ll.x + 180.0) / span - win.x, win.z), dy = (90.0 - ll.y) / span - win.y;
+      e = win.w * smoothstep(0.0, 0.3, dx) * (1.0 - smoothstep(3.7, 4.0, dx)) * smoothstep(0.0, 0.3, dy) * (1.0 - smoothstep(3.7, 4.0, dy));
+      // Offsetting by the window's own slot keeps uv continuous across the window (no mip seams)
+      return texture2D(t, vec2(mod(win.x, 4.0) + dx, mod(win.y, 4.0) + dy) * 0.25);
+    }
+    // City lights: warm sodium glow, saturating to white in dense centres
+    vec3 cityLight(float l) { return vec3(1.0, 0.66, 0.3) * l * 1.5 + vec3(1.0, 0.92, 0.78) * smoothstep(0.45, 1.0, l) * 0.7; }
+    uniform vec4 moonL; // Moon position (camera-relative) and how much moonlight reaches Earth
   `;
   const PLANET_FS = LOG_F + ECLIPSE_GLSL + EARTH_DETAIL_GLSL + `
     uniform sampler2D map; uniform float hasMap; uniform vec3 baseColor;
@@ -120,11 +136,19 @@ const Scene3D = (() => {
       vec3 o = normalize(vO);
       float foot = length(vP) * pxRad / max(abs(dot(N, V)), 0.25);
       float w = earthFx > 0.5 ? 1.0 - smoothstep(4.0, 16.0, foot) : 0.0;
-      float shade = 1.0, water = 0.0;
+      float shade = 1.0, water = 0.0, lights = 0.0, lres = 20.0;
       if (earthFx > 0.5) {
         // The daymap paints all water one flat blue, so colour alone gives a clean mask
         water = smoothstep(0.12, 0.25, tc.b - tc.r) * smoothstep(0.03, 0.09, tc.b - tc.g);
-        if (w > 0.0 && water < 0.99) tc.rgb *= 1.0 + fbm(o + 0.37, 20.0, foot) * 0.6 * w * (1.0 - water);
+        lights = dot(texture2D(night, vUv).rgb, vec3(0.3, 0.59, 0.11));
+        // Real imagery where it has streamed in; res tracks the finest data present (km/texel)
+        vec2 ll = vec2(atan(o.y, o.x), asin(clamp(o.z, -1.0, 1.0))) * (180.0 / PI);
+        float e, res = 20.0; vec4 s;
+        s = clip(tD0, wD0, ll, e); tc.rgb = tc.rgb * (1.0 - s.a * e) + s.rgb * e; res = mix(res, 1.96, s.a * e);
+        s = clip(tD1, wD1, ll, e); tc.rgb = tc.rgb * (1.0 - s.a * e) + s.rgb * e; res = mix(res, 0.49, s.a * e);
+        s = clip(tA0, wA0, ll, e); e *= s.a; lights = mix(lights, s.r, e); water = mix(water, s.g, e); lres = mix(lres, 1.96, e);
+        s = clip(tA1, wA1, ll, e); e *= s.a; lights = mix(lights, s.r, e); water = mix(water, s.g, e); lres = mix(lres, 0.49, e);
+        if (w > 0.0 && water < 0.99) tc.rgb *= 1.0 + fbm(o + 0.37, res, foot) * 0.6 * w * (1.0 - water);
         if (ndl > -0.1) {
           // Cloud shadow: follow the sun ray up to the cloud deck, then look it up in the cloud frame
           vec3 Lo = normalize(vLo);
@@ -136,7 +160,9 @@ const Scene3D = (() => {
           shade = 1.0 - 0.55 * cloudCover(cuv, vec3(cr * os.x + sr * os.y, -sr * os.x + cr * os.y, os.z), foot, w, n);
         }
       }
-      vec3 col = tc.rgb * (diff * vis * shade + ambient);
+      // Moonlight on Earth's night side (clouds and coasts stay readable on a moonlit night)
+      vec3 moon = (earthFx > 0.5 || cloudMode > 0.5) ? vec3(0.72, 0.84, 1.0) * max(dot(N, normalize(moonL.xyz - vP)), 0.0) * moonL.w : vec3(0.0);
+      vec3 col = tc.rgb * (diff * vis * shade + ambient + moon);
       col += tc.rgb * vec3(0.62, 0.2, 0.08) * redden * (1.0 - vis) * max(ndl, 0.0);
       if (water > 0.01 && ndl > -0.05) {
         // Sun glint: Beckmann microfacets, with patchy roughness (wind streaks, slicks) up close
@@ -149,15 +175,24 @@ const Scene3D = (() => {
         float spec = min(PI * D * F / (4.0 * max(dot(N, V), 0.08)) * 2.5, 3.0);
         col += vec3(1.0, 0.95, 0.85) * spec * water * vis * shade * smoothstep(-0.05, 0.08, ndl);
       }
-      if (hasNight > 0.5) {
-        float nf = smoothstep(0.08, -0.12, ndl) + (1.0 - vis) * step(0.0, ndl) * 0.7;
-        col += texture2D(night, vUv).rgb * vec3(1.0, 0.82, 0.55) * 0.85 * clamp(nf, 0.0, 1.0);
+      float nf = clamp(smoothstep(0.08, -0.12, ndl) + (1.0 - vis) * step(0.0, ndl) * 0.7, 0.0, 1.0);
+      if (earthFx > 0.5 && nf > 0.0) {
+        // Up close the lights (data ~20 / 2 / 0.5 km per texel) break up into clusters and
+        // street-scale specks instead of a smooth smear
+        float ls = lres * 0.5, k = clamp(ls / foot / 3.0 - 1.0, 0.0, 1.0);
+        if (k > 0.0 && lights > 0.002) {
+          float m = vnoise(o * (EARTH_R / ls)) * 0.55 + vnoise(o * (EARTH_R / (ls * 0.3)) + 3.7) * 0.3 + vnoise(o * (EARTH_R / (ls * 0.09)) + 7.1) * 0.15;
+          lights *= mix(1.0, smoothstep(0.4, 0.75, m) * 2.6, k * 0.9);
+        }
+        col += cityLight(lights) * nf;
       }
       float alpha = 1.0;
       if (cloudMode > 0.5) {
         float cw = 1.0 - smoothstep(4.0, 16.0, foot), n;
         alpha = cloudCover(vUv, o, foot, cw, n);
-        col = vec3(1.0) * (diff * vis + ambient * 0.5) * (1.0 + n * 0.7 * cw);
+        col = vec3(1.0) * (diff * vis + ambient * 0.5 + moon) * (1.0 + n * 0.7 * cw);
+        // Cities glow through the clouds above them (the cloud layer turns relative to the ground)
+        if (hasNight > 0.5 && nf > 0.0) col += cityLight(dot(texture2D(night, vUv + vec2(cloudRot / (2.0 * PI), 0.0)).rgb, vec3(0.3, 0.59, 0.11))) * 0.45 * nf;
       }
       gl_FragColor = vec4(col, alpha);
     }`;
@@ -170,7 +205,11 @@ const Scene3D = (() => {
         sunPos: SUN_U, sunR: { value: BODY.sun.radius },
         occ: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) },
         redden: { value: o.redden || 0 }, ambient: { value: o.ambient ?? 0.01 }, cloudMode: { value: o.cloud ? 1 : 0 },
-        pxRad: PXRAD_U, earthFx: { value: o.earth ? 1 : 0 }, cloudMap: { value: o.cloudMap || null }, cloudRot: { value: 0 },
+        pxRad: PXRAD_U, earthFx: { value: o.earth ? 1 : 0 }, cloudMap: { value: o.cloudMap || null }, cloudRot: { value: 0 }, moonL: MOON_U,
+        tD0: { value: o.tiles ? o.tiles.day[0].tex : null }, wD0: { value: o.tiles ? o.tiles.day[0].win : new THREE.Vector4() },
+        tD1: { value: o.tiles ? o.tiles.day[1].tex : null }, wD1: { value: o.tiles ? o.tiles.day[1].win : new THREE.Vector4() },
+        tA0: { value: o.tiles ? o.tiles.aux[0].tex : null }, wA0: { value: o.tiles ? o.tiles.aux[0].win : new THREE.Vector4() },
+        tA1: { value: o.tiles ? o.tiles.aux[1].tex : null }, wA1: { value: o.tiles ? o.tiles.aux[1].win : new THREE.Vector4() },
       },
       vertexShader: PLANET_VS, fragmentShader: PLANET_FS,
       transparent: !!o.cloud, depthWrite: !o.cloud,
@@ -188,7 +227,7 @@ const Scene3D = (() => {
   const OCCLUDERS = { earth: ['moon'], moon: ['earth'], jupiter: ['io', 'europa', 'ganymede', 'callisto'], mars: ['phobos', 'deimos'],
     io: ['jupiter'], europa: ['jupiter'], ganymede: ['jupiter'], callisto: ['jupiter'], titan: ['saturn'], phobos: ['mars'], deimos: ['mars'] };
 
-  const cloudTex = tex('earth_clouds', true);
+  const cloudTex = tex('earth_clouds', true), nightTex = tex('earth_nightmap', true);
   for (const b of BODIES) {
     const g = new THREE.Group();
     let mesh;
@@ -197,9 +236,9 @@ const Scene3D = (() => {
     } else {
       const map = b.tex ? tex(b.tex) : null;
       mesh = new THREE.Mesh(b.tex ? sphereGeo : smallSphere, planetMaterial({
-        map, color: b.color, night: b.id === 'earth' ? tex('earth_nightmap') : null,
-        earth: b.id === 'earth', cloudMap: b.id === 'earth' ? cloudTex : null,
-        redden: b.id === 'moon' ? 1 : 0, ambient: b.id === 'moon' ? 0.018 : 0.008,
+        map, color: b.color, night: b.id === 'earth' ? nightTex : null,
+        earth: b.id === 'earth', cloudMap: b.id === 'earth' ? cloudTex : null, tiles: b.id === 'earth' ? earthTiles : null,
+        redden: b.id === 'moon' ? 1 : 0, ambient: b.id === 'moon' ? 0.018 : b.id === 'earth' ? 0.022 : 0.008,
       }));
     }
     g.add(mesh);
@@ -207,19 +246,21 @@ const Scene3D = (() => {
     meshes[b.id] = { group: g, body: mesh, b };
   }
   // Earth: clouds + atmosphere rim
-  const clouds = new THREE.Mesh(sphereGeo, planetMaterial({ map: cloudTex, cloudMap: cloudTex, cloud: true, ambient: 0.02 }));
+  const clouds = new THREE.Mesh(sphereGeo, planetMaterial({ map: cloudTex, cloudMap: cloudTex, night: nightTex, cloud: true, ambient: 0.03 }));
   clouds.scale.setScalar(1 + 12 / BODY.earth.radius);
   meshes.earth.group.add(clouds);
   meshes.earth.clouds = clouds;
   const ATMO_FS = LOG_F + `
-    uniform vec3 sunPos; uniform vec3 tint; uniform float power;
+    uniform vec3 sunPos; uniform vec3 tint; uniform float power; uniform float airglow;
     varying vec3 vN; varying vec3 vP;
     void main() {
       #include <logdepthbuf_fragment>
       vec3 N = normalize(vN); vec3 V = normalize(-vP); vec3 L = normalize(sunPos - vP);
       float rim = pow(1.0 - abs(dot(N, V)), power);
       float lit = smoothstep(-0.35, 0.4, dot(N, L));
-      gl_FragColor = vec4(tint * rim * lit * 1.4, 1.0);
+      // Night side: the thin green airglow line (oxygen emission ~100 km up) seen along the limb
+      vec3 glow = vec3(0.32, 1.0, 0.5) * pow(rim, power * 3.0) * (1.0 - lit) * airglow;
+      gl_FragColor = vec4(tint * rim * lit * 1.4 + glow, 1.0);
     }`;
   const ATMO_VS = LOG_V + `
     varying vec3 vN; varying vec3 vP;
@@ -228,16 +269,16 @@ const Scene3D = (() => {
       gl_Position = projectionMatrix * viewMatrix * wp;
       #include <logdepthbuf_vertex>
     }`;
-  function atmosphere(scale, tint, power) {
+  function atmosphere(scale, tint, power, airglow = 0) {
     const m = new THREE.Mesh(sphereGeo, new THREE.ShaderMaterial({
-      uniforms: { sunPos: SUN_U, tint: { value: new THREE.Color(tint) }, power: { value: power } },
+      uniforms: { sunPos: SUN_U, tint: { value: new THREE.Color(tint) }, power: { value: power }, airglow: { value: airglow } },
       vertexShader: ATMO_VS, fragmentShader: ATMO_FS, transparent: true, depthWrite: false,
       blending: THREE.AdditiveBlending, extensions: { fragDepth: true },
     }));
     m.scale.setScalar(scale);
     return m;
   }
-  meshes.earth.atmo = atmosphere(1.022, '#4f8dff', 2.6);
+  meshes.earth.atmo = atmosphere(1.022, '#4f8dff', 2.6, 0.3);
   meshes.earth.group.add(meshes.earth.atmo);
   meshes.venus.atmo = atmosphere(1.03, '#ffe2a8', 3.0);
   meshes.venus.group.add(meshes.venus.atmo);
@@ -614,6 +655,15 @@ const Scene3D = (() => {
 
     const sunRel = rel(pos.sun);
     SUN_U.value.set(sunRel[0], sunRel[1], sunRel[2]);
+    {
+      // Moonlight scales with the lit fraction of the Moon as seen from Earth
+      const mr = rel(pos.moon), toSun = V3.norm(V3.sub(pos.sun, pos.moon)), toEarth = V3.norm(V3.sub(pos.earth, pos.moon));
+      MOON_U.value.set(mr[0], mr[1], mr[2], 0.24 * (1 + V3.dot(toSun, toEarth)) / 2);
+    }
+    if (!(surface && surface.body === 'earth')) {
+      const R = bodyRot('earth', jd), local = M3.apply(M3.T(R), V3.sub(C, pos.earth));
+      earthTiles.update(local, 1 / pxPerRad / renderer.getPixelRatio(), BODY.earth.radius);
+    }
     sunLight.position.set(sunRel[0], sunRel[1], sunRel[2]).normalize();
 
     for (const id in meshes) {
