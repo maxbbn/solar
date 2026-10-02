@@ -475,7 +475,7 @@ const Scene3D = (() => {
     el.dataset.id = id;
     labelLayer.appendChild(el);
     el.style.display = 'none';
-    labels[id] = { el, span: el.querySelector('span'), shown: false };
+    labels[id] = { el, span: el.querySelector('span'), shown: false, fast: false };
     return labels[id];
   };
   for (const b of BODIES) mkLabel(b.id, b.name, b.color, b.parent && b.parent !== 'earth' ? 'minor' : b.id === 'sun' ? 'sun' : '');
@@ -717,9 +717,14 @@ const Scene3D = (() => {
   }
 
   // ─── Labels ─────────────────────────────────────────────────────────────
+  // A label whose body laps its orbit in under a second of real time can't be read: fade its text, keep the dot.
+  // Orbital period in days (planets, moons, ISS); the Sun and the probe have none.
+  const FAST_LAP = 1.05, SLOW_LAP = 1.25; // seconds per lap: hide at ~1 s or less, show again above 1.25 s (hysteresis)
+  const periodDays = id => id === 'iss' ? ISS.period / 1440 : BODY[id] ? BODY[id].period || (BODY[id].orbit && BODY[id].orbit[1]) : 0;
+  const MOON_MIN_PX = 24; // min on-screen distance from its planet for a satellite to be labelled
   const PRIORITY = ['craft', 'iss', 'sun', 'earth', 'moon', 'mars', 'venus', 'jupiter', 'saturn', 'mercury', 'uranus', 'neptune', 'pluto', 'titan', 'ganymede', 'callisto', 'io', 'europa', 'phobos', 'deimos'];
   function updateLabels(ctx, rel, pxPerRad) {
-    const { pos, surface, toggles, focusId, mission, craftPos } = ctx;
+    const { pos, surface, toggles, focusId, mission, craftPos, rate = 0 } = ctx;
     const placed = [];
     const big = BODIES.filter(b => b.radius > 1000 && !(surface && surface.body === b.id));
     for (const id of PRIORITY) {
@@ -745,23 +750,30 @@ const Scene3D = (() => {
           if (t > 0 && t < d && V3.dot(ro, ro) - t * t < o.radius * o.radius * 0.98) show = false;
         }
       }
-      if (show && BODY[id] && BODY[id].parent && BODY[id].parent !== 'earth' && focusId !== id) {
-        const pp = rel(pos[BODY[id].parent]);
-        if (V3.len(pp) > BODY[id].orbit[0] * 250) show = false;
+      // Zoomed out until a satellite sits right on top of its planet: drop its label (dot too),
+      // otherwise it circles the planet's own dot and the planet seems to flicker
+      const parent = id === 'iss' ? 'earth' : BODY[id] && BODY[id].parent;
+      if (show && parent && focusId !== id) {
+        const pp = rel(pos[parent]);
+        if (V3.len(V3.sub(r, pp)) / V3.len(pp) * pxPerRad < MOON_MIN_PX) show = false;
       }
       const pr = radius / Math.max(d, 1e-9) * pxPerRad;
+      // The followed body stays put on screen, so it keeps its label
+      const P = id === focusId ? 0 : periodDays(id), lap = P && rate > 0 ? P * 86400 / rate : Infinity;
+      L.fast = lap < (L.fast ? SLOW_LAP : FAST_LAP);
       if (show) {
         const yOff = pr > 6 ? -pr : 0;
         const x = sp[0], y = sp[1] + yOff;
         if (x < -40 || y < -40 || x > W + 40 || y > H + 40) show = false;
-        else if (id !== 'craft' && id !== focusId && placed.some(q => Math.abs(q[0] - x) < 44 && Math.abs(q[1] - y) < 16)) show = false;
+        else if (!L.fast && id !== 'craft' && id !== focusId && placed.some(q => Math.abs(q[0] - x) < 44 && Math.abs(q[1] - y) < 16)) show = false;
         else {
-          placed.push([x, y]);
+          if (!L.fast) placed.push([x, y]);
           L.el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
           L.el.classList.toggle('resolved', pr > 6);
           L.el.classList.toggle('focus', id === focusId);
         }
       }
+      L.el.classList.toggle('fast', show && L.fast);
       if (show !== L.shown) { L.el.style.display = show ? '' : 'none'; L.shown = show; }
     }
     // Compass + constellation names (surface only)

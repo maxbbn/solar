@@ -1040,7 +1040,7 @@
     const localSunVis = sunVisibleFraction(cam.C, pos.sun, pos.earth, BODY.earth.radius * 1.02);
     const focusId = S.mode === 'orbit' ? S.orbit.target : S.mode === 'cockpit' ? S.cock.track : S.surf.track;
     Scene3D.update({ jd: S.jd, pos, C: cam.C, dir: cam.dir, up: cam.up, fov: cam.fov, surface: cam.surface, skyOnly: cam.skyOnly, cockpit: S.mode === 'cockpit' && !S.trans ? S.vehicle : null, issPos, issFrame, localSunVis, sunVis, starDim,
-      toggles: S.toggles, mission: m, craftPos, camTargetDist: S.mode === 'orbit' ? S.orbit.dist : S.mode === 'cockpit' ? 1 : null, craftAttitude: att || [0, 0, 1], burning, pulses, focusId });
+      toggles: S.toggles, mission: m, craftPos, camTargetDist: S.mode === 'orbit' ? S.orbit.dist : S.mode === 'cockpit' ? 1 : null, craftAttitude: att || [0, 0, 1], burning, pulses, focusId, rate: S.paused ? 0 : S.rate });
     if (now - hudT > 120) {
       hudT = now;
       updateClock();
