@@ -36,3 +36,4 @@ Deep links: `#onEarth` `#onMoon` `#onMars` `#inner` `#outer` `#saturnBack` `#ecl
 - `assets/` packed textures and star catalog (generated from `tex_src/` by `tools/build_data.py`)
 
 Textures © Solar System Scope, CC BY 4.0; star catalog and constellation lines from d3-celestial (BSD-3).
+ 
