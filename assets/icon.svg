@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <radialGradient id="bg" cx="0.3" cy="0.7" r="0.95">
+      <stop offset="0" stop-color="#21180a"/>
+      <stop offset="0.45" stop-color="#080c16"/>
+      <stop offset="1" stop-color="#03050a"/>
+    </radialGradient>
+    <radialGradient id="sun" cx="0.42" cy="0.4" r="0.6">
+      <stop offset="0" stop-color="#fff4da"/>
+      <stop offset="0.5" stop-color="#ffc560"/>
+      <stop offset="1" stop-color="#ff9a1f"/>
+    </radialGradient>
+    <radialGradient id="glow">
+      <stop offset="0" stop-color="#ffb23e" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#ffb23e" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="tile"><rect width="64" height="64" rx="14"/></clipPath>
+  </defs>
+  <g clip-path="url(#tile)">
+    <rect width="64" height="64" fill="url(#bg)"/>
+    <circle cx="21" cy="43" r="24" fill="url(#glow)"/>
+    <circle cx="21" cy="43" r="31" fill="none" stroke="#72a7ff" stroke-opacity="0.85" stroke-width="2.8"/>
+    <circle cx="21" cy="43" r="12.5" fill="url(#sun)"/>
+    <circle cx="42.9" cy="21.1" r="6.2" fill="#8ab8ff" stroke="#05080f" stroke-width="2.6"/>
+    <circle cx="53" cy="13" r="1.8" fill="#d9d6cf"/>
+  </g>
+</svg>
