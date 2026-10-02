@@ -1,3 +1,5 @@
+<img src="assets/icon.svg" width="96" height="96" alt="">
+
 # True Scale Solar System
 
 [English](README.md) | **简体中文** | [日本語](README.ja.md)
