@@ -17,11 +17,12 @@ const Scene3D = (() => {
   const camera = new THREE.PerspectiveCamera(50, 1, 1e-5, 1e13);
   const loader = new THREE.TextureLoader();
   const maxAniso = renderer.capabilities.getMaxAnisotropy();
-  const tex = key => {
+  const tex = (key, wrap) => {
     const src = window.TEX && window.TEX[key];
     if (!src) return null;
     const t = loader.load(src);
     t.anisotropy = Math.min(8, maxAniso);
+    if (wrap) t.wrapS = THREE.RepeatWrapping;
     return t;
   };
   const LOG_V = '#include <common>\n#include <logdepthbuf_pars_vertex>\n';
@@ -30,14 +31,24 @@ const Scene3D = (() => {
 
   // ─── Shared uniforms ──────────────────────────────────────────────────────
   const SUN_U = { value: new THREE.Vector3() };
+  const PXRAD_U = { value: 1e-3 }; // radians per screen pixel, sets how fine procedural detail may go
+  const MOON_U = { value: new THREE.Vector4() };
+  // Exposure for Earth's night side: 0 while the camera looks at the sunlit side (a day-exposed
+  // view records the night side as black), 1 once it is over the night side and "dark adapted"
+  const NIGHT_U = { value: 0 };
+  const earthTiles = EarthTiles(renderer);
 
   const PLANET_VS = LOG_V + `
-    varying vec2 vUv; varying vec3 vN; varying vec3 vP;
+    uniform vec3 sunPos;
+    varying vec2 vUv; varying vec3 vN; varying vec3 vP; varying vec3 vO; varying vec3 vLo;
     void main() {
       vUv = uv;
+      vO = position;
       vec4 wp = modelMatrix * vec4(position, 1.0);
       vP = wp.xyz;
       vN = normalize(mat3(modelMatrix) * normal);
+      mat3 rot = mat3(normalize(modelMatrix[0].xyz), normalize(modelMatrix[1].xyz), normalize(modelMatrix[2].xyz));
+      vLo = normalize(sunPos - wp.xyz) * rot; // sun direction in the body frame
       gl_Position = projectionMatrix * viewMatrix * wp;
       #include <logdepthbuf_vertex>
     }`;
@@ -58,28 +69,166 @@ const Scene3D = (() => {
       float a3 = 0.5 * sqrt(max((-d + rs + ro) * (d + rs - ro) * (d - rs + ro) * (d + rs + ro), 0.0));
       return clamp(1.0 - (a1 + a2 - a3) / (PI * rs * rs), 0.0, 1.0);
     }`;
-  const PLANET_FS = LOG_F + ECLIPSE_GLSL + `
+  // Earth close up: the 2k maps are ~20 km per texel, so below a few thousand km the clouds,
+  // land and sea get band-limited procedural detail (octaves fade in only once a pixel can
+  // resolve them), cloud shadows and sun glint on water.
+  const EARTH_DETAIL_GLSL = `
+    #define EARTH_R ${BODY.earth.radius.toFixed(1)}
+    #define CLOUD_H 12.0
+    uniform float pxRad; uniform float earthFx; uniform sampler2D cloudMap; uniform float cloudRot;
+    float hash13(vec3 p) { p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
+    float vnoise(vec3 p) {
+      vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(mix(hash13(i), hash13(i + vec3(1, 0, 0)), f.x), mix(hash13(i + vec3(0, 1, 0)), hash13(i + vec3(1, 1, 0)), f.x), f.y),
+                 mix(mix(hash13(i + vec3(0, 0, 1)), hash13(i + vec3(1, 0, 1)), f.x), mix(hash13(i + vec3(0, 1, 1)), hash13(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+    }
+    // Gradient noise in about [-0.5, 0.5]: value noise shows its square lattice once the edge
+    // threshold sharpens it, which reads as blocky clouds from a few thousand km
+    vec3 hash33(vec3 p) {
+      p = fract(p * vec3(0.1031, 0.1030, 0.0973)); p += dot(p, p.yxz + 33.33);
+      return fract((p.xxy + p.yxx) * p.zyx) * 2.0 - 1.0;
+    }
+    float gnoise(vec3 p) {
+      vec3 i = floor(p), f = fract(p), u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+      return 0.7 * mix(mix(mix(dot(hash33(i), f), dot(hash33(i + vec3(1, 0, 0)), f - vec3(1, 0, 0)), u.x),
+                           mix(dot(hash33(i + vec3(0, 1, 0)), f - vec3(0, 1, 0)), dot(hash33(i + vec3(1, 1, 0)), f - vec3(1, 1, 0)), u.x), u.y),
+                       mix(mix(dot(hash33(i + vec3(0, 0, 1)), f - vec3(0, 0, 1)), dot(hash33(i + vec3(1, 0, 1)), f - vec3(1, 0, 1)), u.x),
+                           mix(dot(hash33(i + vec3(0, 1, 1)), f - vec3(0, 1, 1)), dot(hash33(i + vec3(1, 1, 1)), f - vec3(1, 1, 1)), u.x), u.y), u.z);
+    }
+    // o: unit vector in the body frame; lam: largest wavelength in km; foot: km per pixel
+    float fbm(vec3 o, float lam, float foot) {
+      const mat3 R3 = mat3(0.00, 0.80, 0.60, -0.80, 0.36, -0.48, -0.60, -0.48, 0.64);
+      vec3 p = o * (EARTH_R / lam);
+      float s = 0.0, a = 0.5;
+      for (int i = 0; i < 7; i++) {
+        float k = clamp(lam / foot / 3.0 - 1.0, 0.0, 1.0); // fades in between 3 and 6 pixels per wavelength
+        if (k <= 0.0) break;
+        s += a * k * gnoise(p);
+        p = R3 * p * 2.03; lam /= 2.03; a *= 0.5;
+      }
+      return s;
+    }
+    // Cloud opacity at uv / cloud-frame unit vector o; w = how much detail replaces the blurry texture
+    // Cubic B-spline lookup from 4 bilinear taps: thresholding a bilinearly magnified texture
+    // turns its texel grid into blocky steps along the cloud edges
+    float cloudTex(vec2 uv) {
+      const vec2 RES = vec2(2048.0, 1024.0);
+      vec2 st = uv * RES - 0.5, i = floor(st), f = st - i;
+      vec2 w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0, w1 = (4.0 - 6.0 * f * f + 3.0 * f * f * f) / 6.0;
+      vec2 w3 = f * f * f / 6.0, w2 = 1.0 - w0 - w1 - w3;
+      vec2 g0 = w0 + w1, g1 = w2 + w3;
+      vec2 h0 = (i - 0.5 + w1 / g0) / RES, h1 = (i + 1.5 + w3 / g1) / RES;
+      return g0.y * (g0.x * texture2D(cloudMap, vec2(h0.x, h0.y)).r + g1.x * texture2D(cloudMap, vec2(h1.x, h0.y)).r)
+           + g1.y * (g0.x * texture2D(cloudMap, vec2(h0.x, h1.y)).r + g1.x * texture2D(cloudMap, vec2(h1.x, h1.y)).r);
+    }
+    float cloudCover(vec2 uv, vec3 o, float foot, float w, out float n) {
+      n = 0.0;
+      if (w > 0.0) {
+        vec3 q = o * (EARTH_R / 90.0);
+        uv += (vec2(vnoise(q), vnoise(q + 19.7)) - 0.5) * w * vec2(3.0 / 2048.0, 3.0 / 1024.0);
+        n = fbm(o, 40.0, foot);
+      }
+      float d = cloudTex(uv) + n * 0.9 * w;
+      return smoothstep(mix(0.08, 0.2, w), mix(0.9, 0.6, w), d) * 0.92;
+    }
+    // Streamed imagery (js/tiles.js): a 4×4-tile window per zoom level, stored as a ring.
+    // win = (x0, y0, tiles around the globe, opacity); ll = lon/lat in degrees; e = blend weight
+    uniform sampler2D tD0; uniform sampler2D tD1; uniform sampler2D tA0; uniform sampler2D tA1;
+    uniform vec4 wD0; uniform vec4 wD1; uniform vec4 wA0; uniform vec4 wA1;
+    vec4 clip(sampler2D t, vec4 win, vec2 ll, out float e) {
+      float span = 360.0 / win.z;
+      float dx = mod((ll.x + 180.0) / span - win.x, win.z), dy = (90.0 - ll.y) / span - win.y;
+      // Round, wide fade (the window's centre stays within half a tile of the camera's nadir),
+      // so the edge of the detailed patch never shows as a square
+      e = win.w * (1.0 - smoothstep(0.9, 1.95, length(vec2(dx, dy) - 2.0)));
+      // Offsetting by the window's own slot keeps uv continuous across the window (no mip seams)
+      return texture2D(t, vec2(mod(win.x, 4.0) + dx, mod(win.y, 4.0) + dy) * 0.25);
+    }
+    // City lights: warm sodium glow, saturating to white in dense centres
+    // Both night maps draw a dim bluish backdrop under the lights; lights are warm, so keep only
+    // what is redder than it (same rule as js/tiles.js uses for Black Marble)
+    float lightsOf(vec3 c) { return clamp((dot(c, vec3(0.3, 0.59, 0.11)) - 0.6 * c.b - 0.016) * 2.5, 0.0, 1.0); }
+    vec3 cityLight(float l) { return vec3(1.0, 0.66, 0.3) * l * 1.5 + vec3(1.0, 0.92, 0.78) * smoothstep(0.45, 1.0, l) * 0.7; }
+    uniform vec4 moonL; // Moon position (camera-relative) and how much moonlight reaches Earth
+    uniform float nightAdapt;
+  `;
+  const PLANET_FS = LOG_F + ECLIPSE_GLSL + EARTH_DETAIL_GLSL + `
     uniform sampler2D map; uniform float hasMap; uniform vec3 baseColor;
     uniform sampler2D night; uniform float hasNight;
     uniform vec4 occ[4]; uniform float redden; uniform float ambient; uniform float cloudMode;
-    varying vec2 vUv; varying vec3 vN; varying vec3 vP;
+    varying vec2 vUv; varying vec3 vN; varying vec3 vP; varying vec3 vO; varying vec3 vLo;
     void main() {
       #include <logdepthbuf_fragment>
       vec4 tc = hasMap > 0.5 ? texture2D(map, vUv) : vec4(baseColor, 1.0);
       vec3 N = normalize(vN);
       vec3 L = normalize(sunPos - vP);
+      vec3 V = normalize(-vP);
       float ndl = dot(N, L);
       float diff = max(ndl, 0.0);
       float vis = 1.0;
       for (int i = 0; i < 4; i++) if (occ[i].w > 0.0) vis *= sunVisF(vP, occ[i].xyz, occ[i].w);
-      vec3 col = tc.rgb * (diff * vis + ambient);
+      vec3 o = normalize(vO);
+      float foot = length(vP) * pxRad / max(abs(dot(N, V)), 0.25);
+      float w = earthFx > 0.5 ? 1.0 - smoothstep(4.0, 16.0, foot) : 0.0;
+      float shade = 1.0, water = 0.0, lights = 0.0, lres = 20.0;
+      if (earthFx > 0.5) {
+        // The daymap paints all water one flat blue, so colour alone gives a clean mask
+        water = smoothstep(0.12, 0.25, tc.b - tc.r) * smoothstep(0.03, 0.09, tc.b - tc.g);
+        lights = lightsOf(texture2D(night, vUv).rgb);
+        // Real imagery where it has streamed in; res tracks the finest data present (km/texel)
+        vec2 ll = vec2(atan(o.y, o.x), asin(clamp(o.z, -1.0, 1.0))) * (180.0 / PI);
+        float e, res = 20.0; vec4 s;
+        s = clip(tD0, wD0, ll, e); tc.rgb = tc.rgb * (1.0 - s.a * e) + s.rgb * e; res = mix(res, 1.96, s.a * e);
+        s = clip(tD1, wD1, ll, e); tc.rgb = tc.rgb * (1.0 - s.a * e) + s.rgb * e; res = mix(res, 0.49, s.a * e);
+        s = clip(tA0, wA0, ll, e); e *= s.a; lights = mix(lights, s.r, e); water = mix(water, s.g, e); lres = mix(lres, 1.96, e);
+        s = clip(tA1, wA1, ll, e); e *= s.a; lights = mix(lights, s.r, e); water = mix(water, s.g, e); lres = mix(lres, 0.49, e);
+        if (w > 0.0 && water < 0.99) tc.rgb *= 1.0 + fbm(o + 0.37, res, foot) * 0.6 * w * (1.0 - water);
+        if (ndl > -0.1) {
+          // Cloud shadow: follow the sun ray up to the cloud deck, then look it up in the cloud frame
+          vec3 Lo = normalize(vLo);
+          vec3 s = (Lo - o * dot(o, Lo)) * (CLOUD_H / EARTH_R / max(dot(o, Lo), 0.12));
+          vec3 e = vec3(-o.y, o.x, 0.0); float cl = max(length(e), 1e-4); e /= cl;
+          vec2 cuv = vUv + vec2(dot(s, e) / max(cl, 0.05) / (2.0 * PI) - cloudRot / (2.0 * PI), dot(s, cross(o, e)) / PI);
+          vec3 os = normalize(o + s); float cr = cos(cloudRot), sr = sin(cloudRot);
+          float n;
+          shade = 1.0 - 0.55 * cloudCover(cuv, vec3(cr * os.x + sr * os.y, -sr * os.x + cr * os.y, os.z), foot, w, n);
+        }
+      }
+      // Moonlight on Earth's night side (clouds and coasts stay readable on a moonlit night)
+      vec3 moon = (earthFx > 0.5 || cloudMode > 0.5) ? vec3(0.72, 0.84, 1.0) * max(dot(N, normalize(moonL.xyz - vP)), 0.0) * moonL.w : vec3(0.0);
+      float amb = (earthFx > 0.5 || cloudMode > 0.5) ? ambient * nightAdapt : ambient;
+      vec3 col = tc.rgb * (diff * vis * shade + amb + moon);
       col += tc.rgb * vec3(0.62, 0.2, 0.08) * redden * (1.0 - vis) * max(ndl, 0.0);
-      if (hasNight > 0.5) {
-        float nf = smoothstep(0.08, -0.12, ndl) + (1.0 - vis) * step(0.0, ndl) * 0.7;
-        col += texture2D(night, vUv).rgb * vec3(1.0, 0.82, 0.55) * 0.85 * clamp(nf, 0.0, 1.0);
+      if (water > 0.01 && ndl > -0.05) {
+        // Sun glint: Beckmann microfacets, with patchy roughness (wind streaks, slicks) up close
+        float rough = 1.0, kw = clamp(8.0 / foot / 3.0 - 1.0, 0.0, 1.0);
+        if (kw > 0.0) rough += (vnoise(o * (EARTH_R / 8.0)) - 0.5) * 1.2 * kw + (vnoise(o * (EARTH_R / 2.5) + 5.1) - 0.5) * 0.35 * kw;
+        vec3 Hv = normalize(L + V);
+        float nh = max(dot(N, Hv), 1e-3), nh2 = nh * nh, m2 = 0.03 * max(rough, 0.3);
+        float D = exp((nh2 - 1.0) / (nh2 * m2)) / (PI * m2 * nh2 * nh2);
+        float F = 0.02 + 0.98 * pow(1.0 - max(dot(V, Hv), 0.0), 5.0);
+        float spec = min(PI * D * F / (4.0 * max(dot(N, V), 0.08)) * 2.5, 3.0);
+        col += vec3(1.0, 0.95, 0.85) * spec * water * vis * shade * smoothstep(-0.05, 0.08, ndl);
+      }
+      float nf = clamp(smoothstep(0.08, -0.12, ndl) + (1.0 - vis) * step(0.0, ndl) * 0.7, 0.0, 1.0);
+      if (earthFx > 0.5 && nf > 0.0) {
+        // Up close the lights (data ~20 / 2 / 0.5 km per texel) break up into clusters and
+        // street-scale specks instead of a smooth smear
+        float ls = lres * 0.5, k = clamp(ls / foot / 3.0 - 1.0, 0.0, 1.0);
+        if (k > 0.0 && lights > 0.002) {
+          float m = vnoise(o * (EARTH_R / ls)) * 0.55 + vnoise(o * (EARTH_R / (ls * 0.3)) + 3.7) * 0.3 + vnoise(o * (EARTH_R / (ls * 0.09)) + 7.1) * 0.15;
+          lights *= mix(1.0, smoothstep(0.4, 0.75, m) * 2.6, k * 0.9);
+        }
+        col += cityLight(lights) * nf * mix(0.15, 1.0, nightAdapt);
       }
       float alpha = 1.0;
-      if (cloudMode > 0.5) { alpha = smoothstep(0.08, 0.9, tc.r) * 0.92; col = vec3(1.0) * (diff * vis + ambient * 0.5); }
+      if (cloudMode > 0.5) {
+        float cw = 1.0 - smoothstep(4.0, 16.0, foot), n;
+        alpha = cloudCover(vUv, o, foot, cw, n);
+        col = vec3(1.0) * (diff * vis + amb * 0.5 + moon) * (1.0 + n * 0.7 * cw);
+        // Cities glow through the clouds above them (the cloud layer turns relative to the ground)
+        if (hasNight > 0.5 && nf > 0.0) col += cityLight(lightsOf(texture2D(night, vUv + vec2(cloudRot / (2.0 * PI), 0.0)).rgb)) * 0.45 * nf * mix(0.15, 1.0, nightAdapt);
+      }
       gl_FragColor = vec4(col, alpha);
     }`;
 
@@ -91,6 +240,11 @@ const Scene3D = (() => {
         sunPos: SUN_U, sunR: { value: BODY.sun.radius },
         occ: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) },
         redden: { value: o.redden || 0 }, ambient: { value: o.ambient ?? 0.01 }, cloudMode: { value: o.cloud ? 1 : 0 },
+        pxRad: PXRAD_U, earthFx: { value: o.earth ? 1 : 0 }, cloudMap: { value: o.cloudMap || null }, cloudRot: { value: 0 }, moonL: MOON_U, nightAdapt: NIGHT_U,
+        tD0: { value: o.tiles ? o.tiles.day[0].tex : null }, wD0: { value: o.tiles ? o.tiles.day[0].win : new THREE.Vector4() },
+        tD1: { value: o.tiles ? o.tiles.day[1].tex : null }, wD1: { value: o.tiles ? o.tiles.day[1].win : new THREE.Vector4() },
+        tA0: { value: o.tiles ? o.tiles.aux[0].tex : null }, wA0: { value: o.tiles ? o.tiles.aux[0].win : new THREE.Vector4() },
+        tA1: { value: o.tiles ? o.tiles.aux[1].tex : null }, wA1: { value: o.tiles ? o.tiles.aux[1].win : new THREE.Vector4() },
       },
       vertexShader: PLANET_VS, fragmentShader: PLANET_FS,
       transparent: !!o.cloud, depthWrite: !o.cloud,
@@ -108,6 +262,7 @@ const Scene3D = (() => {
   const OCCLUDERS = { earth: ['moon'], moon: ['earth'], jupiter: ['io', 'europa', 'ganymede', 'callisto'], mars: ['phobos', 'deimos'],
     io: ['jupiter'], europa: ['jupiter'], ganymede: ['jupiter'], callisto: ['jupiter'], titan: ['saturn'], phobos: ['mars'], deimos: ['mars'] };
 
+  const cloudTex = tex('earth_clouds', true), nightTex = tex('earth_nightmap', true);
   for (const b of BODIES) {
     const g = new THREE.Group();
     let mesh;
@@ -116,8 +271,9 @@ const Scene3D = (() => {
     } else {
       const map = b.tex ? tex(b.tex) : null;
       mesh = new THREE.Mesh(b.tex ? sphereGeo : smallSphere, planetMaterial({
-        map, color: b.color, night: b.id === 'earth' ? tex('earth_nightmap') : null,
-        redden: b.id === 'moon' ? 1 : 0, ambient: b.id === 'moon' ? 0.018 : 0.008,
+        map, color: b.color, night: b.id === 'earth' ? nightTex : null,
+        earth: b.id === 'earth', cloudMap: b.id === 'earth' ? cloudTex : null, tiles: b.id === 'earth' ? earthTiles : null,
+        redden: b.id === 'moon' ? 1 : 0, ambient: b.id === 'moon' ? 0.005 : b.id === 'earth' ? 0.022 : 0.008,
       }));
     }
     g.add(mesh);
@@ -125,19 +281,21 @@ const Scene3D = (() => {
     meshes[b.id] = { group: g, body: mesh, b };
   }
   // Earth: clouds + atmosphere rim
-  const clouds = new THREE.Mesh(sphereGeo, planetMaterial({ map: tex('earth_clouds'), cloud: true, ambient: 0.02 }));
+  const clouds = new THREE.Mesh(sphereGeo, planetMaterial({ map: cloudTex, cloudMap: cloudTex, night: nightTex, cloud: true, ambient: 0.03 }));
   clouds.scale.setScalar(1 + 12 / BODY.earth.radius);
   meshes.earth.group.add(clouds);
   meshes.earth.clouds = clouds;
   const ATMO_FS = LOG_F + `
-    uniform vec3 sunPos; uniform vec3 tint; uniform float power;
+    uniform vec3 sunPos; uniform vec3 tint; uniform float power; uniform float airglow;
     varying vec3 vN; varying vec3 vP;
     void main() {
       #include <logdepthbuf_fragment>
       vec3 N = normalize(vN); vec3 V = normalize(-vP); vec3 L = normalize(sunPos - vP);
       float rim = pow(1.0 - abs(dot(N, V)), power);
-      float lit = smoothstep(-0.35, 0.4, dot(N, L));
-      gl_FragColor = vec4(tint * rim * lit * 1.4, 1.0);
+      float lit = smoothstep(-0.15, 0.4, dot(N, L));
+      // Night side: the thin green airglow line (oxygen emission ~100 km up) seen along the limb
+      vec3 glow = vec3(0.32, 1.0, 0.5) * pow(rim, power * 3.0) * (1.0 - lit) * airglow;
+      gl_FragColor = vec4(tint * rim * lit * 1.4 + glow, 1.0);
     }`;
   const ATMO_VS = LOG_V + `
     varying vec3 vN; varying vec3 vP;
@@ -146,16 +304,16 @@ const Scene3D = (() => {
       gl_Position = projectionMatrix * viewMatrix * wp;
       #include <logdepthbuf_vertex>
     }`;
-  function atmosphere(scale, tint, power) {
+  function atmosphere(scale, tint, power, airglow = 0) {
     const m = new THREE.Mesh(sphereGeo, new THREE.ShaderMaterial({
-      uniforms: { sunPos: SUN_U, tint: { value: new THREE.Color(tint) }, power: { value: power } },
+      uniforms: { sunPos: SUN_U, tint: { value: new THREE.Color(tint) }, power: { value: power }, airglow: { value: airglow } },
       vertexShader: ATMO_VS, fragmentShader: ATMO_FS, transparent: true, depthWrite: false,
       blending: THREE.AdditiveBlending, extensions: { fragDepth: true },
     }));
     m.scale.setScalar(scale);
     return m;
   }
-  meshes.earth.atmo = atmosphere(1.022, '#4f8dff', 2.6);
+  meshes.earth.atmo = atmosphere(1.022, '#4f8dff', 2.6, 0.3);
   meshes.earth.group.add(meshes.earth.atmo);
   meshes.venus.atmo = atmosphere(1.03, '#ffe2a8', 3.0);
   meshes.venus.group.add(meshes.venus.atmo);
@@ -528,9 +686,27 @@ const Scene3D = (() => {
     if (Math.abs(camera.fov - fov) > 1e-6) { camera.fov = fov; camera.updateProjectionMatrix(); }
     camera.updateMatrixWorld();
     const pxPerRad = H / 2 / Math.tan(fov * DEG / 2);
+    PXRAD_U.value = 1 / pxPerRad;
 
     const sunRel = rel(pos.sun);
     SUN_U.value.set(sunRel[0], sunRel[1], sunRel[2]);
+    {
+      // Moonlight scales with the lit fraction of the Moon as seen from Earth
+      const mr = rel(pos.moon), toSun = V3.norm(V3.sub(pos.sun, pos.moon)), toEarth = V3.norm(V3.sub(pos.earth, pos.moon));
+      // Dark adaptation only once no sunlit ground is in view: the camera sees Earth out to an
+      // angle acos(R/d) from the point below it, the lit side reaches 90° from the subsolar point.
+      // A lit crescent or a lit horizon anywhere in view sets a daylight exposure (night = black).
+      const toCam = V3.sub(C, pos.earth), dCam = V3.len(toCam);
+      const seen = Math.acos(Math.min(1, BODY.earth.radius / dCam));
+      const fromSun = Math.acos(Math.max(-1, Math.min(1, V3.dot(V3.norm(toCam), V3.norm(V3.sub(pos.sun, pos.earth))))));
+      NIGHT_U.value = 1 - smoothstep(-0.25, 0.05, seen + Math.PI / 2 - fromSun);
+      MOON_U.value.set(mr[0], mr[1], mr[2], 0.24 * (1 + V3.dot(toSun, toEarth)) / 2 * NIGHT_U.value);
+      meshes.earth.atmo.material.uniforms.airglow.value = 0.3 * NIGHT_U.value;
+    }
+    if (!(surface && surface.body === 'earth')) {
+      const R = bodyRot('earth', jd), local = M3.apply(M3.T(R), V3.sub(C, pos.earth));
+      earthTiles.update(local, 1 / pxPerRad / renderer.getPixelRatio(), BODY.earth.radius);
+    }
     sunLight.position.set(sunRel[0], sunRel[1], sunRel[2]).normalize();
 
     for (const id in meshes) {
@@ -545,7 +721,8 @@ const Scene3D = (() => {
       if (m.atmo) m.atmo.scale.setScalar(b.radius * (id === 'earth' ? 1.022 : id === 'venus' ? 1.03 : 1.012));
       if (m.clouds) {
         m.clouds.scale.setScalar(b.radius + 12);
-        m.clouds.rotation.z = (jd % 3650) * 0.35 * DEG;
+        m.clouds.rotation.z = ((jd % 3650) * 0.35 % 360) * DEG;
+        m.body.material.uniforms.cloudRot.value = m.clouds.rotation.z;
       }
       const occ = OCCLUDERS[id];
       if (occ) {

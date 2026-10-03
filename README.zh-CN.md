@@ -31,8 +31,9 @@ python3 -m http.server 8765   # 然后打开 http://localhost:8765
 - `js/iss.js` 国际空间站轨道、过境预报与模型（更新轨道：替换文件顶部的 `ISS_TLE`，可从 celestrak.org 获取）
 - `js/astro.js` 星历、天体数据、日月食搜索
 - `js/missions.js` 轨道力学（通用变量开普勒传播、Lambert、任务设计）
+- `js/tiles.js` 相机靠近地球时，从 NASA GIBS 流式加载周围的卫星影像（Blue Marble、VIIRS 夜间灯光、海陆掩膜）；离线时退回内置贴图
 - `js/scene.js` 渲染（浮动原点 + 对数深度缓冲，实现米到天文单位的真实比例）
 - `js/app.js` 相机、时间、界面
 - `assets/` 打包后的贴图与星表（由 `tools/build_data.py` 从 `tex_src/` 生成）
 
-贴图 © Solar System Scope，CC BY 4.0；星表与星座连线来自 d3-celestial（BSD-3）。
+贴图 © Solar System Scope，CC BY 4.0；地球近景影像来自 NASA GIBS（Blue Marble Next Generation、VIIRS Black Marble）与 OpenStreetMap 海陆数据（© OpenStreetMap 贡献者，ODbL）；星表与星座连线来自 d3-celestial（BSD-3）。
