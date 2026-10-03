@@ -145,6 +145,9 @@ const Scene3D = (() => {
       return texture2D(t, vec2(mod(win.x, 4.0) + dx, mod(win.y, 4.0) + dy) * 0.25);
     }
     // City lights: warm sodium glow, saturating to white in dense centres
+    // Both night maps draw a dim bluish backdrop under the lights; lights are warm, so keep only
+    // what is redder than it (same rule as js/tiles.js uses for Black Marble)
+    float lightsOf(vec3 c) { return clamp((dot(c, vec3(0.3, 0.59, 0.11)) - 0.6 * c.b - 0.016) * 2.5, 0.0, 1.0); }
     vec3 cityLight(float l) { return vec3(1.0, 0.66, 0.3) * l * 1.5 + vec3(1.0, 0.92, 0.78) * smoothstep(0.45, 1.0, l) * 0.7; }
     uniform vec4 moonL; // Moon position (camera-relative) and how much moonlight reaches Earth
     uniform float nightAdapt;
@@ -171,7 +174,7 @@ const Scene3D = (() => {
       if (earthFx > 0.5) {
         // The daymap paints all water one flat blue, so colour alone gives a clean mask
         water = smoothstep(0.12, 0.25, tc.b - tc.r) * smoothstep(0.03, 0.09, tc.b - tc.g);
-        lights = dot(texture2D(night, vUv).rgb, vec3(0.3, 0.59, 0.11));
+        lights = lightsOf(texture2D(night, vUv).rgb);
         // Real imagery where it has streamed in; res tracks the finest data present (km/texel)
         vec2 ll = vec2(atan(o.y, o.x), asin(clamp(o.z, -1.0, 1.0))) * (180.0 / PI);
         float e, res = 20.0; vec4 s;
@@ -216,7 +219,7 @@ const Scene3D = (() => {
           float m = vnoise(o * (EARTH_R / ls)) * 0.55 + vnoise(o * (EARTH_R / (ls * 0.3)) + 3.7) * 0.3 + vnoise(o * (EARTH_R / (ls * 0.09)) + 7.1) * 0.15;
           lights *= mix(1.0, smoothstep(0.4, 0.75, m) * 2.6, k * 0.9);
         }
-        col += cityLight(lights) * nf * mix(0.6, 1.0, nightAdapt);
+        col += cityLight(lights) * nf * mix(0.15, 1.0, nightAdapt);
       }
       float alpha = 1.0;
       if (cloudMode > 0.5) {
@@ -224,7 +227,7 @@ const Scene3D = (() => {
         alpha = cloudCover(vUv, o, foot, cw, n);
         col = vec3(1.0) * (diff * vis + amb * 0.5 + moon) * (1.0 + n * 0.7 * cw);
         // Cities glow through the clouds above them (the cloud layer turns relative to the ground)
-        if (hasNight > 0.5 && nf > 0.0) col += cityLight(dot(texture2D(night, vUv + vec2(cloudRot / (2.0 * PI), 0.0)).rgb, vec3(0.3, 0.59, 0.11))) * 0.45 * nf * mix(0.6, 1.0, nightAdapt);
+        if (hasNight > 0.5 && nf > 0.0) col += cityLight(lightsOf(texture2D(night, vUv + vec2(cloudRot / (2.0 * PI), 0.0)).rgb)) * 0.45 * nf * mix(0.15, 1.0, nightAdapt);
       }
       gl_FragColor = vec4(col, alpha);
     }`;
@@ -270,7 +273,7 @@ const Scene3D = (() => {
       mesh = new THREE.Mesh(b.tex ? sphereGeo : smallSphere, planetMaterial({
         map, color: b.color, night: b.id === 'earth' ? nightTex : null,
         earth: b.id === 'earth', cloudMap: b.id === 'earth' ? cloudTex : null, tiles: b.id === 'earth' ? earthTiles : null,
-        redden: b.id === 'moon' ? 1 : 0, ambient: b.id === 'moon' ? 0.018 : b.id === 'earth' ? 0.022 : 0.008,
+        redden: b.id === 'moon' ? 1 : 0, ambient: b.id === 'moon' ? 0.005 : b.id === 'earth' ? 0.022 : 0.008,
       }));
     }
     g.add(mesh);
@@ -289,7 +292,7 @@ const Scene3D = (() => {
       #include <logdepthbuf_fragment>
       vec3 N = normalize(vN); vec3 V = normalize(-vP); vec3 L = normalize(sunPos - vP);
       float rim = pow(1.0 - abs(dot(N, V)), power);
-      float lit = smoothstep(-0.35, 0.4, dot(N, L));
+      float lit = smoothstep(-0.15, 0.4, dot(N, L));
       // Night side: the thin green airglow line (oxygen emission ~100 km up) seen along the limb
       vec3 glow = vec3(0.32, 1.0, 0.5) * pow(rim, power * 3.0) * (1.0 - lit) * airglow;
       gl_FragColor = vec4(tint * rim * lit * 1.4 + glow, 1.0);
@@ -690,10 +693,13 @@ const Scene3D = (() => {
     {
       // Moonlight scales with the lit fraction of the Moon as seen from Earth
       const mr = rel(pos.moon), toSun = V3.norm(V3.sub(pos.sun, pos.moon)), toEarth = V3.norm(V3.sub(pos.earth, pos.moon));
-      // Dark adaptation follows the sun's elevation under the camera (or, from afar, how much
-      // of the visible disc is lit): only a camera over the night side sees moonlight and airglow
-      const sunUp = V3.dot(V3.norm(V3.sub(C, pos.earth)), V3.norm(V3.sub(pos.sun, pos.earth)));
-      NIGHT_U.value = 1 - smoothstep(-0.25, 0.2, sunUp);
+      // Dark adaptation only once no sunlit ground is in view: the camera sees Earth out to an
+      // angle acos(R/d) from the point below it, the lit side reaches 90° from the subsolar point.
+      // A lit crescent or a lit horizon anywhere in view sets a daylight exposure (night = black).
+      const toCam = V3.sub(C, pos.earth), dCam = V3.len(toCam);
+      const seen = Math.acos(Math.min(1, BODY.earth.radius / dCam));
+      const fromSun = Math.acos(Math.max(-1, Math.min(1, V3.dot(V3.norm(toCam), V3.norm(V3.sub(pos.sun, pos.earth))))));
+      NIGHT_U.value = 1 - smoothstep(-0.25, 0.05, seen + Math.PI / 2 - fromSun);
       MOON_U.value.set(mr[0], mr[1], mr[2], 0.24 * (1 + V3.dot(toSun, toEarth)) / 2 * NIGHT_U.value);
       meshes.earth.atmo.material.uniforms.airglow.value = 0.3 * NIGHT_U.value;
     }
