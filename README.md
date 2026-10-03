@@ -34,7 +34,7 @@ Deep links: `#onEarth` `#onMoon` `#onMars` `#inner` `#outer` `#saturnBack` `#ecl
 - `js/tiles.js` streams NASA GIBS imagery (Blue Marble, VIIRS night lights, land/water mask) around the camera when it is close to Earth; offline it falls back to the built-in maps
 - `js/scene.js` rendering (floating origin + logarithmic depth buffer, for true scale from meters to AU)
 - `js/app.js` camera, time, UI
-- `assets/` packed textures and star catalog (generated from `tex_src/` by `tools/build_data.py`)
+- `assets/` packed textures and star catalog (generated from `tex_src/` by `tools/build_data.py`; the Moon's colour and normal maps come from `tools/build_moon.py`)
 
-Textures © Solar System Scope, CC BY 4.0; close-up Earth imagery from NASA GIBS (Blue Marble Next Generation, VIIRS Black Marble) and OpenStreetMap land/water data (© OpenStreetMap contributors, ODbL); star catalog and constellation lines from d3-celestial (BSD-3).
+Textures © Solar System Scope, CC BY 4.0; Moon colour and relief from the NASA SVS CGI Moon Kit (LRO LROC/LOLA); close-up Earth imagery from NASA GIBS (Blue Marble Next Generation, VIIRS Black Marble) and OpenStreetMap land/water data (© OpenStreetMap contributors, ODbL); star catalog and constellation lines from d3-celestial (BSD-3).
  

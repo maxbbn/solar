@@ -34,6 +34,6 @@ python3 -m http.server 8765   # その後 http://localhost:8765 を開く
 - `js/tiles.js` カメラが地球に近づくと、周囲の衛星画像を NASA GIBS から逐次読み込む（Blue Marble、VIIRS 夜間光、海陸マスク）。オフラインでは内蔵テクスチャに戻る
 - `js/scene.js` レンダリング（浮動原点 + 対数深度バッファで、メートルから天文単位までの実寸スケールを実現）
 - `js/app.js` カメラ、時間、UI
-- `assets/` パック済みのテクスチャと星表（`tools/build_data.py` により `tex_src/` から生成）
+- `assets/` パック済みのテクスチャと星表（`tools/build_data.py` により `tex_src/` から生成。月の色と法線マップは `tools/build_moon.py` で生成）
 
-テクスチャ © Solar System Scope、CC BY 4.0。地球の近景画像は NASA GIBS（Blue Marble Next Generation、VIIRS Black Marble）と OpenStreetMap の海陸データ（© OpenStreetMap contributors、ODbL）より。星表と星座線は d3-celestial（BSD-3）より。
+テクスチャ © Solar System Scope、CC BY 4.0。月の色と地形は NASA SVS CGI Moon Kit（LRO LROC/LOLA）より。地球の近景画像は NASA GIBS（Blue Marble Next Generation、VIIRS Black Marble）と OpenStreetMap の海陸データ（© OpenStreetMap contributors、ODbL）より。星表と星座線は d3-celestial（BSD-3）より。
