@@ -40,10 +40,11 @@ const Scene3D = (() => {
 
   const PLANET_VS = LOG_V + `
     uniform vec3 sunPos;
-    varying vec2 vUv; varying vec3 vN; varying vec3 vP; varying vec3 vO; varying vec3 vLo;
+    varying vec2 vUv; varying vec3 vN; varying vec3 vP; varying vec3 vO; varying vec3 vLo; varying vec3 vE;
     void main() {
       vUv = uv;
       vO = position;
+      vE = mat3(modelMatrix) * vec3(-position.y, position.x, 0.0); // local east, for normal maps
       vec4 wp = modelMatrix * vec4(position, 1.0);
       vP = wp.xyz;
       vN = normalize(mat3(modelMatrix) * normal);
@@ -154,9 +155,10 @@ const Scene3D = (() => {
   `;
   const PLANET_FS = LOG_F + ECLIPSE_GLSL + EARTH_DETAIL_GLSL + `
     uniform sampler2D map; uniform float hasMap; uniform vec3 baseColor;
+    uniform sampler2D normalMap; uniform float hasNormal; uniform float lunar;
     uniform sampler2D night; uniform float hasNight;
     uniform vec4 occ[4]; uniform float redden; uniform float ambient; uniform float cloudMode;
-    varying vec2 vUv; varying vec3 vN; varying vec3 vP; varying vec3 vO; varying vec3 vLo;
+    varying vec2 vUv; varying vec3 vN; varying vec3 vP; varying vec3 vO; varying vec3 vLo; varying vec3 vE;
     void main() {
       #include <logdepthbuf_fragment>
       vec4 tc = hasMap > 0.5 ? texture2D(map, vUv) : vec4(baseColor, 1.0);
@@ -165,6 +167,19 @@ const Scene3D = (() => {
       vec3 V = normalize(-vP);
       float ndl = dot(N, L);
       float diff = max(ndl, 0.0);
+      if (hasNormal > 0.5) {
+        // Relief from the normal map (east, north, up), lit by the real Sun direction; the
+        // geometric terminator still gates it so slopes cannot light up the night side
+        vec3 t = texture2D(normalMap, vUv).rgb * 2.0 - 1.0;
+        vec3 E = vE - N * dot(vE, N); float le = length(E);
+        vec3 Ns = le > 1e-5 ? normalize(N * t.z + (E / le) * t.x + cross(N, E / le) * t.y) : N;
+        diff = max(dot(Ns, L), 0.0) * smoothstep(-0.04, 0.03, ndl);
+      }
+      if (lunar > 0.5) {
+        // Regolith scatters close to Lommel–Seeliger: a full Moon is a flat disc, not a ball
+        float mu = max(dot(N, V), 0.0);
+        diff = mix(diff, 2.0 * diff / (diff + mu + 1e-4), 0.85);
+      }
       float vis = 1.0;
       for (int i = 0; i < 4; i++) if (occ[i].w > 0.0) vis *= sunVisF(vP, occ[i].xyz, occ[i].w);
       vec3 o = normalize(vO);
@@ -240,6 +255,7 @@ const Scene3D = (() => {
         sunPos: SUN_U, sunR: { value: BODY.sun.radius },
         occ: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) },
         redden: { value: o.redden || 0 }, ambient: { value: o.ambient ?? 0.01 }, cloudMode: { value: o.cloud ? 1 : 0 },
+        normalMap: { value: o.normalMap || null }, hasNormal: { value: o.normalMap ? 1 : 0 }, lunar: { value: o.lunar ? 1 : 0 },
         pxRad: PXRAD_U, earthFx: { value: o.earth ? 1 : 0 }, cloudMap: { value: o.cloudMap || null }, cloudRot: { value: 0 }, moonL: MOON_U, nightAdapt: NIGHT_U,
         tD0: { value: o.tiles ? o.tiles.day[0].tex : null }, wD0: { value: o.tiles ? o.tiles.day[0].win : new THREE.Vector4() },
         tD1: { value: o.tiles ? o.tiles.day[1].tex : null }, wD1: { value: o.tiles ? o.tiles.day[1].win : new THREE.Vector4() },
@@ -273,6 +289,7 @@ const Scene3D = (() => {
       mesh = new THREE.Mesh(b.tex ? sphereGeo : smallSphere, planetMaterial({
         map, color: b.color, night: b.id === 'earth' ? nightTex : null,
         earth: b.id === 'earth', cloudMap: b.id === 'earth' ? cloudTex : null, tiles: b.id === 'earth' ? earthTiles : null,
+        normalMap: b.id === 'moon' ? tex('moon_normal', true) : null, lunar: b.id === 'moon',
         redden: b.id === 'moon' ? 1 : 0, ambient: b.id === 'moon' ? 0.005 : b.id === 'earth' ? 0.022 : 0.008,
       }));
     }
