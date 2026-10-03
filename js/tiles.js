@@ -13,9 +13,24 @@ const EarthTiles = (renderer) => {
   };
   const TILE = 512, N = 4, SIZE = TILE * N, PX = TILE * TILE;
   const KM_PER_DEG = 111.32;
-  // Pixels: day = premultiplied RGBA; aux = R city lights, G water, A coverage
+  // Blue Marble is graded very differently from the built-in daymap (near-black ocean, darker
+  // land), so tiles are recoloured to match it. Land: per-channel curves a·x^g + c fitted by
+  // matching the two maps' land histograms over the whole globe. Water (from the OSM mask): the
+  // daymap's flat ocean blue, keeping half of Blue Marble's shallow-water tint on top.
+  const LAND = [[300.7, 0.40, -55.8], [328.7, 0.35, -87.7], [408.4, 0.23, -170.2]].map(([a, g, c]) =>
+    Uint8ClampedArray.from({ length: 256 }, (_, v) => a * (v / 255) ** g + c));
+  const OCEAN = [30, 59, 117], DEEP = [2, 5, 20];
+  // Pixels: day = RGBA with A = coverage; aux = R city lights, G water, A coverage
   const pack = {
-    bmng: ([c], out) => { for (let i = 0; i < PX * 4; i += 4) { out[i] = c[i]; out[i + 1] = c[i + 1]; out[i + 2] = c[i + 2]; out[i + 3] = 255; } },
+    bmng: ([c, w], out) => {
+      for (let i = 0; i < PX * 4; i += 4) {
+        // The mask and the imagery disagree by a pixel or so along coasts; dark, blue-dominant
+        // pixels are water whatever the mask says (else the land curve draws them as black rims)
+        const rg = Math.max(c[i], c[i + 1]), water = w[i] > 100 || (c[i + 2] > rg && rg < 24);
+        for (let k = 0; k < 3; k++) out[i + k] = water ? OCEAN[k] + (c[i + k] - DEEP[k]) * 0.5 : LAND[k][c[i + k]];
+        out[i + 3] = 255;
+      }
+    },
     aux: ([l, w], out) => {
       // Black Marble paints a bluish moonlit backdrop under the lights (ice ~(42,49,81), desert
       // ~(36,33,62)); lights are warm, so keep only what is redder than that backdrop
@@ -28,8 +43,8 @@ const EarthTiles = (renderer) => {
   // Blue Marble tops out at z7 (~490 m/px). GIBS's finer global Landsat composites (WELD) are
   // striped and off-colour, so below that the shader's procedural detail takes over.
   const DEFS = [
-    { kind: 'day', z: 5, src: ['bmng'], pack: pack.bmng },
-    { kind: 'day', z: 7, src: ['bmng'], pack: pack.bmng },
+    { kind: 'day', z: 5, src: ['bmng', 'water'], pack: pack.bmng },
+    { kind: 'day', z: 7, src: ['bmng', 'water'], pack: pack.bmng },
     { kind: 'aux', z: 5, src: ['lights', 'water'], pack: pack.aux },
     { kind: 'aux', z: 7, src: ['lights', 'water'], pack: pack.aux },
   ];

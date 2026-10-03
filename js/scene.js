@@ -79,6 +79,19 @@ const Scene3D = (() => {
       return mix(mix(mix(hash13(i), hash13(i + vec3(1, 0, 0)), f.x), mix(hash13(i + vec3(0, 1, 0)), hash13(i + vec3(1, 1, 0)), f.x), f.y),
                  mix(mix(hash13(i + vec3(0, 0, 1)), hash13(i + vec3(1, 0, 1)), f.x), mix(hash13(i + vec3(0, 1, 1)), hash13(i + vec3(1, 1, 1)), f.x), f.y), f.z);
     }
+    // Gradient noise in about [-0.5, 0.5]: value noise shows its square lattice once the edge
+    // threshold sharpens it, which reads as blocky clouds from a few thousand km
+    vec3 hash33(vec3 p) {
+      p = fract(p * vec3(0.1031, 0.1030, 0.0973)); p += dot(p, p.yxz + 33.33);
+      return fract((p.xxy + p.yxx) * p.zyx) * 2.0 - 1.0;
+    }
+    float gnoise(vec3 p) {
+      vec3 i = floor(p), f = fract(p), u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+      return 0.7 * mix(mix(mix(dot(hash33(i), f), dot(hash33(i + vec3(1, 0, 0)), f - vec3(1, 0, 0)), u.x),
+                           mix(dot(hash33(i + vec3(0, 1, 0)), f - vec3(0, 1, 0)), dot(hash33(i + vec3(1, 1, 0)), f - vec3(1, 1, 0)), u.x), u.y),
+                       mix(mix(dot(hash33(i + vec3(0, 0, 1)), f - vec3(0, 0, 1)), dot(hash33(i + vec3(1, 0, 1)), f - vec3(1, 0, 1)), u.x),
+                           mix(dot(hash33(i + vec3(0, 1, 1)), f - vec3(0, 1, 1)), dot(hash33(i + vec3(1, 1, 1)), f - vec3(1, 1, 1)), u.x), u.y), u.z);
+    }
     // o: unit vector in the body frame; lam: largest wavelength in km; foot: km per pixel
     float fbm(vec3 o, float lam, float foot) {
       const mat3 R3 = mat3(0.00, 0.80, 0.60, -0.80, 0.36, -0.48, -0.60, -0.48, 0.64);
@@ -87,12 +100,24 @@ const Scene3D = (() => {
       for (int i = 0; i < 7; i++) {
         float k = clamp(lam / foot / 3.0 - 1.0, 0.0, 1.0); // fades in between 3 and 6 pixels per wavelength
         if (k <= 0.0) break;
-        s += a * k * (vnoise(p) - 0.5);
+        s += a * k * gnoise(p);
         p = R3 * p * 2.03; lam /= 2.03; a *= 0.5;
       }
       return s;
     }
     // Cloud opacity at uv / cloud-frame unit vector o; w = how much detail replaces the blurry texture
+    // Cubic B-spline lookup from 4 bilinear taps: thresholding a bilinearly magnified texture
+    // turns its texel grid into blocky steps along the cloud edges
+    float cloudTex(vec2 uv) {
+      const vec2 RES = vec2(2048.0, 1024.0);
+      vec2 st = uv * RES - 0.5, i = floor(st), f = st - i;
+      vec2 w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0, w1 = (4.0 - 6.0 * f * f + 3.0 * f * f * f) / 6.0;
+      vec2 w3 = f * f * f / 6.0, w2 = 1.0 - w0 - w1 - w3;
+      vec2 g0 = w0 + w1, g1 = w2 + w3;
+      vec2 h0 = (i - 0.5 + w1 / g0) / RES, h1 = (i + 1.5 + w3 / g1) / RES;
+      return g0.y * (g0.x * texture2D(cloudMap, vec2(h0.x, h0.y)).r + g1.x * texture2D(cloudMap, vec2(h1.x, h0.y)).r)
+           + g1.y * (g0.x * texture2D(cloudMap, vec2(h0.x, h1.y)).r + g1.x * texture2D(cloudMap, vec2(h1.x, h1.y)).r);
+    }
     float cloudCover(vec2 uv, vec3 o, float foot, float w, out float n) {
       n = 0.0;
       if (w > 0.0) {
@@ -100,7 +125,7 @@ const Scene3D = (() => {
         uv += (vec2(vnoise(q), vnoise(q + 19.7)) - 0.5) * w * vec2(3.0 / 2048.0, 3.0 / 1024.0);
         n = fbm(o, 40.0, foot);
       }
-      float d = texture2D(cloudMap, uv).r + n * 0.9 * w;
+      float d = cloudTex(uv) + n * 0.9 * w;
       return smoothstep(mix(0.08, 0.2, w), mix(0.9, 0.6, w), d) * 0.92;
     }
     // Streamed imagery (js/tiles.js): a 4×4-tile window per zoom level, stored as a ring.
@@ -110,7 +135,9 @@ const Scene3D = (() => {
     vec4 clip(sampler2D t, vec4 win, vec2 ll, out float e) {
       float span = 360.0 / win.z;
       float dx = mod((ll.x + 180.0) / span - win.x, win.z), dy = (90.0 - ll.y) / span - win.y;
-      e = win.w * smoothstep(0.0, 0.3, dx) * (1.0 - smoothstep(3.7, 4.0, dx)) * smoothstep(0.0, 0.3, dy) * (1.0 - smoothstep(3.7, 4.0, dy));
+      // Round, wide fade (the window's centre stays within half a tile of the camera's nadir),
+      // so the edge of the detailed patch never shows as a square
+      e = win.w * (1.0 - smoothstep(0.9, 1.95, length(vec2(dx, dy) - 2.0)));
       // Offsetting by the window's own slot keeps uv continuous across the window (no mip seams)
       return texture2D(t, vec2(mod(win.x, 4.0) + dx, mod(win.y, 4.0) + dy) * 0.25);
     }
