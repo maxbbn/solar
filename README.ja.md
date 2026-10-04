@@ -25,6 +25,18 @@ python3 -m http.server 8765   # その後 http://localhost:8765 を開く
 
 ディープリンク：`#onEarth` `#onMoon` `#onMars` `#inner` `#outer` `#saturnBack` `#eclipse-solar` `#eclipse-lunar` `#mission-moon` `#mission-mars` `#cockpit-moon`（月探査ミッションを打ち上げてコックピット視点に入る） `#iss` `#cupola`
 
+## ビルド
+
+ソースはそのまま動作します。デプロイされるのは `dist/` の本番ビルドです：
+
+```sh
+npm install
+npm run build     # dist/ に出力
+npm run preview   # ビルド後、http://localhost:8766 で dist/ を配信
+```
+
+`tools/build.mjs` はスクリプトを 3 つのバンドル（three.js、星表とテクスチャ一覧、アプリコード）に結合・圧縮して source map を生成し、CSS と HTML を圧縮し、惑星テクスチャは base64 の `assets/textures.js` ではなく個別の画像として配信します。`index.html` 以外のファイル名にはすべて内容ハッシュが付き、`dist/_headers` で `/assets/*` を 1 年間キャッシュします（`immutable`）。`index.html` は毎回再検証されるため、新しいリリースは次回の読み込みで反映されます。Cloudflare は `wrangler.jsonc` の `build.command` でビルドを実行します。
+
 ## ディレクトリ構成
 
 - `js/i18n.js` 言語の検出と切り替え

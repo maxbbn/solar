@@ -25,6 +25,18 @@ python3 -m http.server 8765   # 然后打开 http://localhost:8765
 
 深链接：`#onEarth` `#onMoon` `#onMars` `#inner` `#outer` `#saturnBack` `#eclipse-solar` `#eclipse-lunar` `#mission-moon` `#mission-mars` `#cockpit-moon`（发射探月任务并进入驾驶视图） `#iss` `#cupola`
 
+## 构建
+
+源码可直接运行；部署的是 `dist/` 中的生产构建：
+
+```sh
+npm install
+npm run build     # 输出到 dist/
+npm run preview   # 构建后在 http://localhost:8766 预览 dist/
+```
+
+`tools/build.mjs` 将脚本合并并压缩为三个包（three.js、星表与贴图清单、应用代码）并生成 source map，压缩 CSS 与 HTML，行星贴图以独立图片提供，不再使用 base64 的 `assets/textures.js`。除 `index.html` 外，所有文件名都带内容哈希，`dist/_headers` 让 `/assets/*` 缓存一年（`immutable`）；`index.html` 每次都会重新验证，因此发布新版本后下次打开即生效。Cloudflare 通过 `wrangler.jsonc` 中的 `build.command` 执行构建。
+
 ## 目录
 
 - `js/i18n.js` 语言检测与切换

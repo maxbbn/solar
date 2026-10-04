@@ -25,6 +25,18 @@ python3 -m http.server 8765   # then open http://localhost:8765
 
 Deep links: `#onEarth` `#onMoon` `#onMars` `#inner` `#outer` `#saturnBack` `#eclipse-solar` `#eclipse-lunar` `#mission-moon` `#mission-mars` `#cockpit-moon` (launch the lunar mission and enter the cockpit view) `#iss` `#cupola`
 
+## Building
+
+The source runs as-is; the deployed site is a production build in `dist/`:
+
+```sh
+npm install
+npm run build     # writes dist/
+npm run preview   # builds, then serves dist/ at http://localhost:8766
+```
+
+`tools/build.mjs` concatenates and minifies the scripts into three bundles (three.js, star catalog + texture manifest, app code) with source maps, minifies the CSS and HTML, and serves the planet textures as separate images instead of the base64 `assets/textures.js`. Every file except `index.html` gets a content hash in its name, and `dist/_headers` caches `/assets/*` for a year (`immutable`); `index.html` is always revalidated, so a new release is picked up on the next load. Cloudflare runs the build through `build.command` in `wrangler.jsonc`.
+
 ## Layout
 
 - `js/i18n.js` language detection and switching
