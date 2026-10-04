@@ -1,3 +1,5 @@
 .gstack/
 .DS_Store
 tex_src/.cache/
+node_modules/
+dist/

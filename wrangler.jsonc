@@ -4,8 +4,12 @@
   "observability": {
     "enabled": true
   },
+  // `npm run build` writes the hashed, minified site to dist/ (tools/build.mjs).
+  "build": {
+    "command": "npm run build"
+  },
   "assets": {
-    "directory": "."
+    "directory": "./dist"
   },
   "previews": {}
 }
