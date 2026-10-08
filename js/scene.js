@@ -940,6 +940,8 @@ const Scene3D = (() => {
         d = V3.len(r);
         sp = project(r);
         if (!sp) show = false;
+        // Right down at a body's surface its centre label just floats in the ground: drop it
+        if (radius > 1000 && d - radius < radius * 0.02) show = false;
       }
       if (show) {
         const u = V3.mul(r, 1 / d);

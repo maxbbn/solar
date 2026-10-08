@@ -204,11 +204,11 @@ function StarshipLayer(o) {
     const bodyMat = mk(bodyMap, bodyMask);
     const cyl = new THREE.Mesh(new THREE.CylinderGeometry(R, R, body, 72, 1, true), bodyMat);
     cyl.position.y = body / 2; g.add(cyl);
-    // Nose: tangent ogive
+    // Nose: tangent ogive, full radius at its base (y = 0), closing to the tip at y = Ln
     const pts = [], Ln = h - body;
     for (let i = 0; i <= 24; i++) {
       const s = i / 24, rho = (R * R + Ln * Ln) / (2 * R), y = s * Ln;
-      pts.push(new THREE.Vector2(Math.max(0.05, Math.sqrt(Math.max(0, rho * rho - (Ln - y) ** 2)) + R - rho), body + y));
+      pts.push(new THREE.Vector2(Math.max(0.05, Math.sqrt(Math.max(0, rho * rho - y * y)) + R - rho), body + y));
     }
     const noseMat = mk(shipTex(Ln, body, () => 0), shipTex(Ln, body, () => 0, true));
     g.add(new THREE.Mesh(new THREE.LatheGeometry(pts, 72), noseMat));
