@@ -28,6 +28,7 @@ const Scene3D = (() => {
   const LOG_V = '#include <common>\n#include <logdepthbuf_pars_vertex>\n';
   const LOG_F = '#include <common>\n#include <logdepthbuf_pars_fragment>\n';
   const STAR_R = 1e11;
+  let starLayer = null; // Starship layer, created once the labels exist
 
   // ─── Shared uniforms ──────────────────────────────────────────────────────
   const SUN_U = { value: new THREE.Vector3() };
@@ -577,7 +578,8 @@ const Scene3D = (() => {
   function setMission(m) {
     for (const p of missionPieces) { scene.remove(p.past.line, p.future.line); }
     missionPieces = [];
-    if (!m) return;
+    if (starLayer) starLayer.setFlight(m && m.kind === 'starship' ? m : null);
+    if (!m || m.kind === 'starship') return;
     for (const piece of m.paths) {
       const times = sampleTimes(m, piece);
       const pts = times.map(t => V3.sub(m.pos(t), bodyPos(piece.frame, t)));
@@ -671,8 +673,11 @@ const Scene3D = (() => {
     const dirs = tr('北,东北,东,东南,南,西南,西,西北', 'N,NE,E,SE,S,SW,W,NW').split(',');
     compass.forEach((c, i) => { c.el.textContent = dirs[i]; });
     constNames.forEach((c, i) => { constEls[i].textContent = tr(c.zh, c.en); });
+    if (starLayer) starLayer.relabel();
   }
   relabel();
+  // Starship: vehicles, launch tower, Starbase coast, plumes and steam (js/starship-scene.js)
+  starLayer = typeof StarshipLayer === 'function' ? StarshipLayer({ scene, renderer, labelLayer, LOG_V, LOG_F, project, camera }) : null;
 
   const tmpV = new THREE.Vector3(), tmpM = new THREE.Matrix4();
   let W = 1, H = 1;
@@ -704,6 +709,7 @@ const Scene3D = (() => {
     camera.updateMatrixWorld();
     const pxPerRad = H / 2 / Math.tan(fov * DEG / 2);
     PXRAD_U.value = 1 / pxPerRad;
+    if (starLayer) starLayer.update(ctx);
 
     const sunRel = rel(pos.sun);
     SUN_U.value.set(sunRel[0], sunRel[1], sunRel[2]);
@@ -780,7 +786,7 @@ const Scene3D = (() => {
     // skyOnly: flying low through Earth's atmosphere (nose camera), sky without ground
     const skyEnv = surface || ctx.skyOnly;
     skyDome.visible = !!(skyEnv && SKY_STYLE[skyEnv.body].zen);
-    ground.visible = !!surface;
+    ground.visible = !!surface && !(starLayer && starLayer.groundCovers);
     if (ctx.skyOnly && !surface) {
       const st = SKY_STYLE[ctx.skyOnly.body], sd = V3.norm(sunRel), up = ctx.skyOnly.up;
       skyU.sunDir.value.set(sd[0], sd[1], sd[2]);
@@ -856,7 +862,8 @@ const Scene3D = (() => {
     ambient.intensity = 0.25 + 0.35 * ctx.localSunVis;
 
     // Mission
-    craft.visible = plume.visible = !!mission;
+    const probe = mission && mission.kind !== 'starship' ? mission : null;
+    craft.visible = plume.visible = !!probe;
     for (const p of missionPieces) {
       const fr = rel(pos[p.piece.frame] || bodyPos(p.piece.frame, jd));
       let k = 0, lo = 0, hi = p.times.length - 1;
@@ -880,7 +887,7 @@ const Scene3D = (() => {
       fillPath(p.past, p.pts, 0, k, fr, craftRel, false);
       fillPath(p.future, p.pts, Math.max(0, k - (inside ? 0 : 1)), p.pts.length, fr, craftRel, true);
     }
-    if (mission && craftPos) {
+    if (probe && craftPos) {
       const r = rel(craftPos);
       craft.position.set(r[0], r[1], r[2]);
       const att = ctx.craftAttitude;
@@ -925,7 +932,7 @@ const Scene3D = (() => {
       const L = labels[id];
       let show = toggles.labels;
       let r, radius = 0;
-      if (id === 'craft') { show = !!(mission && craftPos) && ctx.cockpit !== 'rocket'; if (show) r = rel(craftPos); }
+      if (id === 'craft') { show = !!(mission && craftPos) && mission.kind !== 'starship' && ctx.cockpit !== 'rocket'; if (show) r = rel(craftPos); }
       else if (id === 'iss') { show = toggles.labels && ctx.cockpit !== 'iss'; r = rel(ctx.issPos); radius = 0.055; }
       else { radius = BODY[id].radius; r = rel(pos[id]); if (surface && surface.body === id) show = false; }
       let sp = null, d = 0;

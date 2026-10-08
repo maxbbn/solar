@@ -27,13 +27,21 @@
       site('盖尔陨坑 · 好奇号', 'Gale Crater · Curiosity', -5.4, 137.8),
     ],
   };
+  // Starbase spectator spots, as offsets (km east, north) from Pad 1
+  const starbaseSite = (zh, en, de, dn) => { const p = STARSHIP_PADS.olp1; return site(zh, en, p.lat + dn / 111.32, p.lon + de / (111.32 * Math.cos(p.lat * DEG))); };
+  const STARBASE_SITES = [
+    starbaseSite('星港 · 4 号公路（2 公里）', 'Starbase · Highway 4 (2 km)', -1.9, 0.3),
+    starbaseSite('星港 · 海滩（1.3 公里）', 'Starbase · beach (1.3 km)', 0.66, -1.1),
+    starbaseSite('南帕德雷岛（9 公里）', 'South Padre Island (9 km)', 0.2, 9.1),
+  ];
+  SITES.earth.push(...STARBASE_SITES);
   const LOOK = {
     earth: ['moon', 'sun', 'iss', 'venus', 'mars', 'jupiter'],
     moon: ['earth', 'sun'],
     mars: ['earth', 'sun', 'phobos'],
   };
   // In Chinese the Moon in the sky is 月亮 rather than 月球
-  const skyName = id => id === 'moon' ? tr('月亮', 'Moon') : id === 'iss' ? tr('空间站', 'ISS') : BODY[id].name;
+  const skyName = id => id === 'moon' ? tr('月亮', 'Moon') : id === 'iss' ? tr('空间站', 'ISS') : id === 'ship' ? tr('星舰', 'Ship') : id === 'booster' ? tr('助推器', 'Booster') : BODY[id].name;
 
   const S = {
     jd: jdFromMs(Date.now()),
@@ -49,6 +57,7 @@
     toggles: { labels: true, orbits: true, constellations: false },
     mission: null, autoPace: true,
     plan: { target: 'moon', site: LAUNCH_SITES[0], result: null, pork: null, pick: null },
+    tab: 'probe', star: { id: 'flight8catch', recovery: null, when: 'history' }, starView: null, autoFov: false,
     pulses: [],
   };
 
@@ -121,17 +130,34 @@
   }
 
   // ─── Camera ───────────────────────────────────────────────────────────────
+  const isStar = () => !!(S.mission && S.mission.kind === 'starship');
+  // Starship targets: the middle of each vehicle (or of the stack), and the launch tower
+  function starPos(id, pos, jd) {
+    const m = S.mission, F = m.F, t = m.tOf(jd), R = bodyRot('earth', jd);
+    if (id === 'pad') return m.world(V3.add(V3.mul(F.P, 1e-3), V3.mul(V3.norm(F.P), 0.06)), jd, pos.earth);
+    const ship = id === 'ship', st = ship ? F.shipState(t) : F.boosterState(t), fr = ship ? F.shipFrame(t) : F.boosterFrame(t);
+    const half = t < m.mission.timeline.stage ? (ship ? 0.012 : 0.06) : ship ? 0.026 : 0.036;
+    return V3.add(m.world(st.r, jd, pos.earth), V3.mul(M3.apply(R, fr[0]), half));
+  }
   function targetPos(id, pos, jd) {
-    if (id === 'craft') return S.mission ? S.mission.pos(jd) : pos.earth;
+    if (id === 'ship' || id === 'booster' || id === 'pad') return isStar() ? starPos(id, pos, jd) : pos.earth;
+    if (id === 'craft') return S.mission ? (isStar() ? starPos('ship', pos, jd) : S.mission.pos(jd)) : pos.earth;
     if (id === 'iss') return ISS.pos(jd, pos.earth);
     return pos[id];
   }
-  const targetRadius = id => id === 'craft' ? 0.02 : id === 'iss' ? 0.055 : BODY[id].radius;
-  const minDist = id => id === 'craft' ? 0.06 : id === 'iss' ? 0.075 : BODY[id].radius * (1 + (id === 'sun' ? 0.02 : 0.004)) + 1;
+  const STAR_R = { ship: 0.03, booster: 0.04, pad: 0.08 };
+  const targetRadius = id => id === 'craft' ? 0.02 : id === 'iss' ? 0.055 : STAR_R[id] || BODY[id].radius;
+  const minDist = id => id === 'craft' ? 0.06 : id === 'iss' ? 0.075 : STAR_R[id] ? STAR_R[id] * 1.3 : BODY[id].radius * (1 + (id === 'sun' ? 0.02 : 0.004)) + 1;
   const issBasis = jd => { const f = ISS.frame(jd); return [f.F, f.port, f.up]; }; // follows the station around its orbit
+  // Local horizon at a point near Earth (east, north, up), so a chase camera keeps the horizon level
+  function enuBasis(T, pos, jd) {
+    const R = bodyRot('earth', jd), up = V3.norm(V3.sub(T, pos.earth)), east = V3.norm(V3.cross([R[2], R[5], R[8]], up));
+    return [east, V3.cross(up, east), up];
+  }
 
   function orbitCam(jd, pos) {
-    const o = S.orbit, B = o.basis === 'iss' ? issBasis(jd) : o.basis || ECL, T = targetPos(o.target, pos, jd);
+    const o = S.orbit, T = targetPos(o.target, pos, jd);
+    const B = o.basis === 'iss' ? issBasis(jd) : o.basis === 'enu' ? enuBasis(T, pos, jd) : o.basis || ECL;
     const cp = Math.cos(o.pitch);
     const off = V3.add(V3.add(V3.mul(B[0], cp * Math.cos(o.yaw)), V3.mul(B[1], cp * Math.sin(o.yaw))), V3.mul(B[2], Math.sin(o.pitch)));
     return { C: V3.add(T, V3.mul(off, o.dist)), dir: V3.mul(off, -1), up: B[2], fov: S.orbitFov, anchor: T, anchorId: o.target };
@@ -151,7 +177,14 @@
   }
   function surfaceCam(jd, pos) {
     const s = S.surf, f = surfaceFrame(jd, pos);
-    if (s.track) { const a = altAz(targetPos(s.track, pos, jd), f); s.alt = a.alt; s.az = a.az; }
+    if (s.track) {
+      const tp = targetPos(s.track, pos, jd), a = altAz(tp, f); s.alt = a.alt; s.az = a.az;
+      if (S.autoFov && STAR_R[s.track]) { // long-lens tracking camera: keep the vehicle a good size in frame
+        const d = V3.len(V3.sub(tp, f.C)), size = s.track === 'pad' ? 0.16 : S.mission && S.mission.tOf(jd) < S.mission.mission.timeline.stage ? 0.125 : s.track === 'ship' ? 0.052 : 0.072;
+        const want = clamp(2 * Math.atan(size * 1.9 / d) / DEG, 0.15, 60);
+        s.fov += (want - s.fov) * 0.08;
+      }
+    }
     const alt = clamp(s.alt, -89.9 * DEG, 89.9 * DEG);
     const dir = V3.add(V3.mul(V3.add(V3.mul(f.north, Math.cos(s.az)), V3.mul(f.east, Math.sin(s.az))), Math.cos(alt)), V3.mul(f.up, Math.sin(alt)));
     return { C: f.C, dir, up: f.up, fov: s.fov, anchor: pos[s.body], anchorId: s.body, surface: { body: s.body, up: f.up, east: f.east, north: f.north, h: s.h }, frame: f };
@@ -160,6 +193,10 @@
   function craftState(jd, pos) {
     const m = S.mission;
     if (!m) return null;
+    if (m.kind === 'starship') {
+      const which = S.vehicle === 'booster' ? 'booster' : 'ship', craftPos = m.worldOf(which, jd, pos.earth);
+      return { craftPos, att: [0, 0, 1], burning: false, frame: 'earth', fb: pos.earth, alt: V3.len(V3.sub(craftPos, pos.earth)) - BODY.earth.radius };
+    }
     const craftPos = m.pos(jd), frame = craftFrame(jd), fb = pos[frame] || bodyPos(frame, jd);
     const v = V3.sub(m.vel(jd), m.refVel(jd));
     const up = V3.norm(V3.sub(craftPos, pos.earth));
@@ -176,7 +213,32 @@
   }
   // Onboard camera: mounted on the side of the rocket at mid-body, oriented in the rocket's own frame
   // (forward = nose, "up" = away from the body it flies around), like an onboard camera.
+  // Starship onboard cameras: the ship's is on the leeward side near the payload bay looking aft
+  // past the flaps (like SpaceX's), the booster's sits under the grid fins looking down the hull
+  function starshipCam(jd, pos) {
+    const m = S.mission, F = m.F, t = m.tOf(jd), which = S.vehicle, k = S.cock, R = bodyRot('earth', jd);
+    const st = which === 'ship' ? F.shipState(t) : F.boosterState(t), [n0, b0] = which === 'ship' ? F.shipFrame(t) : F.boosterFrame(t);
+    const N = M3.apply(R, n0), B = M3.apply(R, b0), X = V3.cross(N, B);
+    const out = which === 'ship' ? V3.mul(B, -1) : X; // camera looks out from this side of the hull
+    const base = m.world(st.r, jd, pos.earth);
+    const C = V3.add(base, V3.add(V3.mul(N, which === 'ship' ? 0.036 : F.veh.booster.h / 1000 - 0.012), V3.mul(out, 0.0058)));
+    const F0 = V3.mul(N, -1), right = V3.cross(F0, out);
+    if (k.track) {
+      const d = V3.norm(V3.sub(targetPos(k.track, pos, jd), C));
+      k.yaw = Math.atan2(V3.dot(d, right), V3.dot(d, F0)); k.pitch = Math.asin(clamp(V3.dot(d, out), -1, 1));
+    }
+    const cy = Math.cos(k.yaw), sy = Math.sin(k.yaw), cp = Math.cos(k.pitch), sp = Math.sin(k.pitch);
+    const horiz = V3.add(V3.mul(F0, cy), V3.mul(right, sy));
+    const dir = V3.add(V3.mul(horiz, cp), V3.mul(out, sp)), camUp = V3.sub(V3.mul(out, cp), V3.mul(horiz, sp));
+    const radial = V3.norm(V3.sub(C, pos.earth)), alt = V3.len(V3.sub(C, pos.earth)) - BODY.earth.radius;
+    const pole = [R[2], R[5], R[8]], east = V3.norm(V3.cross(pole, radial)), north = V3.cross(radial, east);
+    let surface = null, skyOnly = null;
+    if (alt < 2) surface = { body: 'earth', up: radial, east, north, h: Math.max(alt, 0.002), noCompass: true };
+    else if (alt < 150) skyOnly = { body: 'earth', up: radial, fade: 1 - smoothstep(15, 140, alt) };
+    return { C, dir, up: camUp, fov: k.fov, anchor: C, anchorId: which, surface, skyOnly, cockpit: { F: N } };
+  }
   function cockpitCam(jd, pos) {
+    if ((S.vehicle === 'ship' || S.vehicle === 'booster') && isStar()) return starshipCam(jd, pos);
     const iss = S.vehicle === 'iss', cs = iss ? issState(jd, pos) : S.cs, k = S.cock;
     if (!cs) return orbitCam(jd, pos);
     const F = cs.att, radial = V3.norm(V3.sub(cs.craftPos, cs.fb));
@@ -214,6 +276,10 @@
   }
   function computeCamera(jd, pos) {
     let cam = S.mode === 'surface' ? surfaceCam(jd, pos) : S.mode === 'cockpit' ? cockpitCam(jd, pos) : orbitCam(jd, pos);
+    if (S.mode === 'orbit' && isStar()) { // chasing a Starship vehicle through the air: draw the sky
+      const radial = V3.norm(V3.sub(cam.C, pos.earth)), alt = V3.len(V3.sub(cam.C, pos.earth)) - BODY.earth.radius;
+      if (alt < 150) cam = { ...cam, skyOnly: { body: 'earth', up: radial, fade: 1 - smoothstep(15, 140, alt) } };
+    }
     const tr = S.trans;
     if (tr) {
       const s = clamp((performance.now() - tr.t0) / tr.dur, 0, 1), e = ease(s);
@@ -244,6 +310,7 @@
   }
   function focusBody(id, silentView) {
     if (id === 'craft') return followCraft();
+    if (id === 'ship' || id === 'booster') return starView('chase-' + id);
     if (id === 'iss') return issView();
     const pos = allPositions(S.jd), P = pos[id];
     const sd = id === 'sun' ? [1, 0, 0] : V3.norm(V3.sub(pos.sun, P));
@@ -311,14 +378,19 @@
   const COCK_LOOKS = {
     rocket: [['back', '回望箭体', 'Look aft'], ['fwd', '前方', 'Forward'], ['earth', '看地球', 'Earth'], ['target', '看目的地', 'Target']],
     iss: [['limb', '地平线', 'Horizon'], ['nadir', '正下方', 'Straight down'], ['moon', '看月亮', 'Moon']],
+    ship: [['aft', '回望船尾', 'Look aft'], ['out', '向外', 'Outward'], ['fwd', '向前', 'Forward'], ['earth', '看地球', 'Earth']],
+    booster: [['aft', '俯视箭体', 'Down the hull'], ['out', '向外', 'Outward'], ['fwd', '向上', 'Up'], ['earth', '看地球', 'Earth']],
   };
   function setCockpit(look, vehicle = 'rocket') {
+    if (vehicle === 'rocket' && isStar()) vehicle = 'ship';
     if (vehicle === 'rocket' && !S.mission) { toast(NO_MISSION()); return; }
     if (S.mode !== 'cockpit' || S.vehicle !== vehicle) startTransition();
     S.mode = 'cockpit';
     S.vehicle = vehicle;
     S.view = vehicle === 'iss' ? 'cupola' : 'cockpit';
-    if (!look) look = vehicle === 'iss' ? 'limb' : S.jd < S.mission.tBurn + 0.05 ? 'back' : 'fwd';
+    const deploying = vehicle === 'ship' && isStar() && (t => t > S.mission.mission.timeline.deploy[0] - 30 && t < S.mission.mission.timeline.deploy[1] + 60)(S.mission.tOf(S.jd));
+    if (!look) look = vehicle === 'iss' ? 'limb' : deploying ? 'out' : vehicle === 'ship' || vehicle === 'booster' ? 'aft' : S.jd < S.mission.tBurn + 0.05 ? 'back' : 'fwd';
+    if (vehicle === 'ship' || vehicle === 'booster') S.view = null;
     S.cock.fov = 70;
     setCockLook(look);
     refreshUI();
@@ -331,6 +403,11 @@
     if (look === 'back') { k.yaw = Math.PI - 14 * DEG; k.pitch = -4 * DEG; }
     if (look === 'limb') { k.yaw = 0; k.pitch = -12 * DEG; }
     if (look === 'nadir') { k.yaw = 0; k.pitch = -89 * DEG; }
+    if (S.vehicle === 'ship' || S.vehicle === 'booster') {
+      if (look === 'aft') { k.yaw = 0; k.pitch = 9 * DEG; }
+      if (look === 'out') { k.yaw = 0; k.pitch = 55 * DEG; }
+      if (look === 'fwd') { k.yaw = Math.PI; k.pitch = 12 * DEG; }
+    }
     renderCockpitHud();
   }
   function issView() {
@@ -339,6 +416,7 @@
   }
   function followCraft() {
     if (!S.mission) { toast(NO_MISSION()); return; }
+    if (isStar()) { starView('chase-ship'); return; }
     const m = S.mission, pos = allPositions(S.jd);
     S.view = 'craft';
     if (S.jd < m.tLaunch + 0.02) {
@@ -387,7 +465,7 @@
       c.pitch = clamp(c.pitch + dy * k, -89 * DEG, 89 * DEG);
     } else {
       const k = S.surf.fov * DEG / Scene3D.size[1];
-      if (S.surf.track && dragMoved > 3) { S.surf.track = null; renderLookBtns(); }
+      if (S.surf.track && dragMoved > 3) { S.surf.track = null; S.autoFov = false; renderLookBtns(); }
       S.surf.az -= dx * k;
       S.surf.alt = clamp(S.surf.alt + dy * k, -89.9 * DEG, 89.9 * DEG);
     }
@@ -404,6 +482,7 @@
       S.cock.fov = clamp(S.cock.fov * Math.exp(delta * 0.0012), 1, 110);
     } else {
       S.surf.fov = clamp(S.surf.fov * Math.exp(delta * 0.0012), 0.1, 100);
+      S.autoFov = false;
       syncFov();
     }
   }
@@ -565,16 +644,17 @@
     $('fovRange').value = Math.round((Math.log(S.surf.fov) - FOV_MIN) / (FOV_MAX - FOV_MIN) * 1000);
     $('fovText').textContent = `${S.surf.fov < 2 ? S.surf.fov.toFixed(2) : S.surf.fov.toFixed(0)}°`;
   }
-  $('fovRange').addEventListener('input', e => { S.surf.fov = Math.exp(FOV_MIN + (FOV_MAX - FOV_MIN) * e.target.value / 1000); syncFov(); });
+  $('fovRange').addEventListener('input', e => { S.autoFov = false; S.surf.fov = Math.exp(FOV_MIN + (FOV_MAX - FOV_MIN) * e.target.value / 1000); syncFov(); });
   $('siteSel').addEventListener('change', e => {
     const list = SITES[S.surf.body], site = list[+e.target.value];
     if (site) setSurface(S.surf.body, site, S.surf.track, S.surf.fov);
   });
   $('btnLeave').addEventListener('click', () => { S.view = null; focusBody(S.surf.body); });
   function renderLookBtns() {
-    $('lookBtns').innerHTML = LOOK[S.surf.body].map(id => `<button class="chip ${S.surf.track === id ? 'on' : ''}" data-id="${id}">${tr('看', '')}${skyName(id)}</button>`).join('');
+    const ids = S.surf.body === 'earth' && isStar() ? ['ship', 'booster', 'sun', 'moon'] : LOOK[S.surf.body];
+    $('lookBtns').innerHTML = ids.map(id => `<button class="chip ${S.surf.track === id ? 'on' : ''}" data-id="${id}">${tr('看', '')}${skyName(id)}</button>`).join('');
   }
-  $('lookBtns').addEventListener('click', e => { const b = e.target.closest('.chip'); if (b) { S.surf.track = b.dataset.id; renderLookBtns(); } });
+  $('lookBtns').addEventListener('click', e => { const b = e.target.closest('.chip'); if (b) { S.surf.track = b.dataset.id; S.autoFov = !!STAR_R[b.dataset.id]; renderLookBtns(); } });
   function renderSurfaceHud() {
     const list = SITES[S.surf.body];
     let idx = list.indexOf(S.surf.site);
@@ -600,9 +680,10 @@
 
   // ─── Info panel ───────────────────────────────────────────────────────────
   function infoBodyId() {
-    if (S.mode === 'surface') return S.surf.track && S.surf.track !== 'craft' ? S.surf.track : S.surf.body;
+    const v = id => (STAR_R[id] ? 'craft' : id);
+    if (S.mode === 'surface') return S.surf.track && S.surf.track !== 'craft' ? v(S.surf.track) : S.surf.body;
     if (S.mode === 'cockpit') return S.vehicle === 'iss' ? 'iss' : 'craft';
-    return S.orbit.target;
+    return v(S.orbit.target);
   }
   let infoKey = '';
   const setTitle = (name, kind) => { $('infoTitle').innerHTML = `<b>${name}</b><span class="kind">${kind}</span>`; };
@@ -619,6 +700,11 @@
           <div class="btn-row"><button class="btn" data-act="cupola">${tr('舷窗视角', 'Cupola view')}</button><button class="btn" data-act="focus" data-id="iss">${tr('跟随空间站', 'Follow the ISS')}</button></div>
           <p class="note-sm">${tr(`轨道数据：${fmtDate(ISS.epoch)} 的真实两行根数（TLE）。离这个日期越远，位置越不准。`, `Orbit: a real TLE from ${fmtDate(ISS.epoch)}. The further from that date, the less exact the position.`)}</p>
           <div id="pulseBox"></div>`;
+      } else if (id === 'craft' && isStar()) {
+        const m = S.mission;
+        setTitle(`${tr('星舰', 'Starship')} ${m.mission.serials.join(' / ')}`, tr('运载火箭', 'Launch vehicle'));
+        el.innerHTML = `<p class="fact" style="border:0;padding:0;margin:0">${tr('星舰全长约 123 米、直径 9 米，是迄今最大、推力最强的火箭。两级都设计为可完全重复使用：助推器飞回发射塔被“筷子”夹住，飞船再入大气层后翻身点火着陆。',
+          'Starship stands about 123 m tall and 9 m wide, the largest and most powerful rocket yet. Both stages are built to be reused: the booster flies back to be caught by the tower, the ship re-enters, flips upright and lands on its engines.')}</p><div id="pulseBox"></div>`;
       } else if (id === 'craft') {
         setTitle(S.mission ? S.mission.craft : tr('探测器', 'Probe'), tr('航天器', 'Spacecraft'));
         el.innerHTML = `<p class="fact" style="border:0;padding:0;margin:0">${tr('真实的火箭只有约 40 米长。把镜头拉远，看看它在太空中有多渺小。', 'The real rocket is only about 40 m long. Zoom out to see how tiny it is in space.')}</p><div id="pulseBox"></div>`;
@@ -779,9 +865,12 @@
   }
   const CLOSE_BTN = () => `<button class="xbtn" data-close title="${tr('关闭', 'Close')}"><svg class="ico" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>`;
   const drawerHead = title => `<div class="drawer-head"><h2>${title}</h2>${CLOSE_BTN()}</div>`;
+  const tabsHtml = () => `<div class="tabs" role="tablist">${[['probe', '深空探测', 'Deep space'], ['starship', '星舰', 'Starship']].map(([id, zh, en]) =>
+    `<button role="tab" data-tab="${id}" class="${S.tab === id ? 'on' : ''}" aria-selected="${S.tab === id}">${tr(zh, en)}</button>`).join('')}</div>`;
   function refreshMissionUI() {
     const el = $('mission');
     if (S.mission) { renderMissionHud(); return; }
+    if (S.tab === 'starship') { renderStarshipPlan(); return; }
     const p = S.plan;
     let body = '';
     const zh = I18N.lang === 'zh';
@@ -809,7 +898,7 @@
             : `Leave now: Δv <span class="num">${p.now ? p.now.dv.toFixed(2) : '—'}</span> km/s · <span class="num">${p.now ? p.now.tof : '—'}</span>-day flight`}</div>
         <div class="btn-row"><button class="btn primary" data-act="launchPick">${pick === b ? tr('跳到最佳窗口发射', 'Launch at the best window') : tr('按所选方案发射', 'Launch the selected plan')}</button><button class="btn" data-act="launchNow">${tr('立即发射', 'Launch now')}</button></div>`;
     } else body = `<div class="plan note">${tr('正在计算发射窗口…', 'Working out launch windows…')}</div>`;
-    el.innerHTML = `${drawerHead(tr('发射任务', 'Launch'))}
+    el.innerHTML = `${drawerHead(tr('发射任务', 'Launch'))}${tabsHtml()}
       <div class="seg" role="group" aria-label="${tr('目的地', 'Destination')}">${TARGETS.map(id => `<button data-target="${id}" class="${p.target === id ? 'on' : ''}">${BODY[id].name}</button>`).join('')}</div>
       <label class="field" for="siteLaunch">${tr('发射场', 'Launch site')} <select id="siteLaunch">${LAUNCH_SITES.map((s, i) => `<option value="${i}" ${s === p.site ? 'selected' : ''}>${s.name}</option>`).join('')}</select></label>
       ${body}`;
@@ -830,6 +919,12 @@
       return;
     }
     if (!b) return;
+    if (b.dataset.tab) { S.tab = b.dataset.tab; refreshMissionUI(); if (S.tab === 'probe' && !S.plan.result && !S.plan.pork) setTimeout(planFor, 30); return; }
+    if (b.dataset.flight) { S.star.id = b.dataset.flight; S.star.recovery = null; refreshMissionUI(); return; }
+    if (b.dataset.recovery) { S.star.recovery = b.dataset.recovery; refreshMissionUI(); return; }
+    if (b.dataset.when) { S.star.when = b.dataset.when; refreshMissionUI(); return; }
+    if (b.dataset.sv) { starView(b.dataset.sv); return; }
+    if (b.dataset.act === 'launchStar') { launchStarship(); return; }
     if (b.dataset.target) { S.plan.target = b.dataset.target; S.plan.pork = null; S.plan.result = null; refreshMissionUI(); setTimeout(planFor, 30); return; }
     const act = b.dataset.act;
     if (act === 'launchMoon') { planFor(); launch(S.plan.result); }
@@ -838,13 +933,20 @@
     if (act === 'follow') followCraft();
     if (act === 'cockpit') setCockpit(null, 'rocket');
     if (act === 'overview') overviewMission();
-    if (act === 'end') { S.mission = null; missionHudBuilt = null; Scene3D.setMission(null); if ((S.mode === 'cockpit' && S.vehicle === 'rocket') || (S.mode === 'orbit' && S.orbit.target === 'craft')) focusBody('earth'); refreshMissionUI(); refreshUI(); }
-    if (act === 'event') { const ev = S.mission.events[+b.dataset.i]; S.jd = ev.t - 20 / DAY; S.autoPace = true; S.paused = false; refreshMissionUI(); }
+    if (act === 'end') {
+      const star = isStar(), onIt = (S.mode === 'cockpit' && S.vehicle !== 'iss') || (S.mode === 'orbit' && (S.orbit.target === 'craft' || STAR_R[S.orbit.target])) || (S.mode === 'surface' && STAR_R[S.surf.track]);
+      S.mission = null; missionHudBuilt = null; S.starView = null; S.autoFov = false; Scene3D.setMission(null);
+      if (star && S.mode === 'surface' && STAR_R[S.surf.track]) { S.surf.track = null; renderLookBtns(); }
+      else if (onIt) focusBody('earth');
+      refreshMissionUI(); refreshUI();
+    }
+    if (act === 'event') { const ev = S.mission.events[+b.dataset.i]; S.jd = ev.t - (isStar() ? 8 : 20) / DAY; S.autoPace = true; S.paused = false; refreshMissionUI(); }
   });
   $('mission').addEventListener('change', e => { if (e.target.id === 'autoPace') { S.autoPace = e.target.checked; } });
   function overviewMission() {
     const m = S.mission;
     S.view = null;
+    if (m.kind === 'starship') { starView('overview'); return; }
     if (m.kind === 'moon') {
       const d = V3.norm(V3.sub(bodyPos('moon', m.tArr), bodyPos('earth', m.tArr)));
       setOrbit('earth', 1.0e6, Math.atan2(d[1], d[0]) - 90 * DEG, 70 * DEG, 50);
@@ -852,7 +954,7 @@
   }
   function craftFrame(jd) {
     const m = S.mission;
-    if (!m) return 'earth';
+    if (!m || m.kind === 'starship') return 'earth';
     if (m.kind === 'moon') return jd < m.tArr ? 'earth' : 'moon';
     const tsE = m.paths[0].t1, aA = m.paths[2].t0;
     return jd < tsE ? 'earth' : jd < aA ? 'sun' : m.target;
@@ -860,6 +962,7 @@
   let missionHudBuilt = null;
   function renderMissionHud() {
     const m = S.mission, el = $('mission');
+    if (m.kind === 'starship') { renderStarshipHud(); return; }
     if (missionHudBuilt !== m) {
       missionHudBuilt = m;
       el.innerHTML = `${drawerHead(`${m.name} · ${tr(`${m.site.name}发射`, `from ${m.site.name}`)}`)}
@@ -875,6 +978,7 @@
   }
   function updateMissionHud(pos) {
     const m = S.mission;
+    if (m && m.kind === 'starship') { updateStarshipHud(); return; }
     if (!m || !$('met')) return;
     const t = S.jd - m.tLaunch, s = Math.abs(t) * DAY;
     $('met').textContent = `T${t < 0 ? '−' : '+'} ${s >= 86400 ? Math.floor(s / 86400) + tr(' 天 ', ' d ') : ''}${pad((s % 86400) / 3600)}:${pad((s % 3600) / 60)}:${pad(s % 60)}`;
@@ -897,6 +1001,166 @@
     });
   }
 
+  // ─── Starship ─────────────────────────────────────────────────────────────
+  const starMission = () => STARSHIP_MISSIONS.find(x => x.id === S.star.id) || STARSHIP_MISSIONS[0];
+  const fmtUtc = iso => { const d = new Date(iso); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`; };
+  function renderStarshipPlan() {
+    const mis = starMission(), veh = STARSHIP_VEHICLES[mis.vehicle], rec = S.star.recovery || mis.booster.recovery;
+    const pl = mis.payload, plName = { sim: tr('星链模拟星', 'Starlink simulators'), v2mini: tr('星链 V2 mini', 'Starlink V2 mini'), v3: tr('星链 V3 卫星', 'Starlink V3 satellites') }[pl.type];
+    const prof = mis.ship.profile === 'orbital' ? tr(`入轨 ${mis.ship.orbit.peri}×${mis.ship.orbit.apo} km`, `orbit ${mis.ship.orbit.peri}×${mis.ship.orbit.apo} km`) : tr('亚轨道', 'suborbital');
+    $('mission').innerHTML = `${drawerHead(tr('发射任务', 'Launch'))}${tabsHtml()}
+      <div class="flights">${STARSHIP_MISSIONS.map(x => `<button class="flight ${x === mis ? 'on' : ''}" data-flight="${x.id}"><b>${tr(...x.name)}</b><span class="when">${x.date.slice(0, 10)}</span>
+        <small>${tr(...STARSHIP_VEHICLES[x.vehicle].name)} · ${x.serials.join(' / ')}</small></button>`).join('')}</div>
+      <div class="plan"><strong>${tr(...mis.name)}</strong> · ${STARSHIP_PADS[mis.pad].name} · <span class="num">${fmtUtc(mis.date)}</span><br>
+        <span class="note">${tr(`载荷 ${pl.count} 颗${plName}（约 ${(pl.count * pl.mass / 1000).toFixed(0)} 吨）· 飞船${prof}，${mis.ship.splash[0]}溅落`, `${pl.count} ${plName} (about ${(pl.count * pl.mass / 1000).toFixed(0)} t) · ship ${prof}, splashdown in the ${mis.ship.splash[1]}`)}</span></div>
+      <ul class="facts">${mis.facts.map(f => `<li>${tr(...f)}</li>`).join('')}</ul>
+      <p class="note-sm">${tr(...mis.real)}</p>
+      <div class="optrow"><span>${tr('助推器', 'Booster')}</span><div class="seg two">${[['catch', '塔架捕获', 'Tower catch'], ['gulf', '海上溅落', 'Gulf splashdown']].map(([id, zh, en]) => `<button data-recovery="${id}" class="${rec === id ? 'on' : ''}">${tr(zh, en)}</button>`).join('')}</div></div>
+      <div class="optrow"><span>${tr('发射时间', 'Liftoff')}</span><div class="seg two">${[['history', '历史时刻', 'As flown'], ['now', '现在', 'Now']].map(([id, zh, en]) => `<button data-when="${id}" class="${S.star.when === id ? 'on' : ''}">${tr(zh, en)}</button>`).join('')}</div></div>
+      <div class="btn-row"><button class="btn primary" data-act="launchStar">${tr('开始倒计时', 'Start the countdown')}</button></div>
+      <p class="note-sm">${tr('轨迹由三自由度物理仿真算出（推力、大气阻力、地球自转），各节点时刻取自 SpaceX 公布的飞行时间线。', "Trajectories come from a 3-DOF physics simulation (thrust, drag, Earth's rotation), timed to SpaceX's published flight timelines.")}</p>`;
+  }
+  function launchStarship(cb) {
+    const mis = starMission(), rec = S.star.recovery || mis.booster.recovery;
+    toast(tr('正在计算轨迹…', 'Working out the trajectory…'), 1500);
+    setTimeout(() => {
+      const jd = S.star.when === 'history' ? jdFromMs(Date.parse(mis.date)) : S.jd + 50 / DAY;
+      const L = Starship.launch(mis, jd, { recovery: rec });
+      S.mission = L; missionHudBuilt = null;
+      Scene3D.setMission(L);
+      closePanel();
+      S.reverse = false;
+      jumpTo(jd - 45 / DAY);
+      S.paused = false; S.autoPace = true; S.rate = 1;
+      S.vehicle = 'ship';
+      starView('pad');
+      S.trans = null;
+      toast(tr(`${L.name}：倒计时 45 秒。点“任务”面板切换镜头；“自动调速”会在关键时刻放慢`, `${L.name}: T−45 s. Switch cameras in the Mission panel; auto pace slows down for the key moments`), 6000);
+      refreshMissionUI(); refreshUI();
+      if (cb) cb();
+    }, 40);
+  }
+  // Cameras: tracking telescope from the ground, chase cameras, onboard cameras, overview
+  const STAR_VIEWS = [
+    ['pad', '地面跟踪', 'Ground tracker'], ['tower', '发射塔', 'Launch tower'], ['chase-ship', '跟随飞船', 'Chase ship'], ['chase-booster', '跟随助推器', 'Chase booster'],
+    ['cam-ship', '飞船摄像头', 'Ship camera'], ['cam-booster', '助推器摄像头', 'Booster camera'], ['overview', '轨迹全程', 'Whole trajectory'],
+  ];
+  function busyVehicle(t) { // the vehicle worth watching right now
+    const m = S.mission, TL = m.mission.timeline;
+    return t > TL.stage + 20 && t < TL.land + 15 ? 'booster' : 'ship';
+  }
+  function starView(id) {
+    const m = S.mission;
+    if (!isStar()) { toast(NO_MISSION()); return; }
+    const t = m.tOf(S.jd), F = m.F;
+    S.starView = id; S.autoFov = false; S.view = null;
+    if (id === 'pad') {
+      const near = t < m.mission.timeline.land + 60 || t > F.t.landShip;
+      const site = near ? STARBASE_SITES[0] : STARBASE_SITES[0];
+      setSurface('earth', site, busyVehicle(t), 30);
+      S.autoFov = true;
+    } else if (id === 'tower') {
+      setOrbit('pad', 0.42, 215 * DEG, 14 * DEG, 50, 'enu');
+    } else if (id === 'chase-ship' || id === 'chase-booster') {
+      const which = id.slice(6);
+      setOrbit(which, t < m.mission.timeline.stage ? 0.3 : which === 'ship' ? 0.17 : 0.2, 205 * DEG, 10 * DEG, 50, 'enu');
+    } else if (id === 'cam-ship' || id === 'cam-booster') {
+      setCockpit(null, id.slice(4));
+      S.starView = id;
+    } else if (id === 'overview') {
+      setOrbit('pad', 4200, 250 * DEG, 52 * DEG, 50, 'enu');
+    }
+    renderStarshipHud(true);
+    refreshUI();
+  }
+  let starHudBuilt = null;
+  function renderStarshipHud(force) {
+    const m = S.mission, el = $('mission');
+    if (starHudBuilt === m && !force && $('met')) { const ap = $('autoPace'); if (ap) ap.checked = S.autoPace; return; }
+    starHudBuilt = m; missionHudBuilt = m;
+    el.innerHTML = `${drawerHead(`${m.name} · ${m.mission.serials.join(' / ')}`)}
+      <div class="met" id="met"></div>
+      <div class="phase" id="phase"></div>
+      <dl class="rows" id="mstats"></dl>
+      <div class="camgrid">${STAR_VIEWS.map(([id, zh, en]) => `<button class="btn ${S.starView === id ? 'on' : ''}" data-sv="${id}">${tr(zh, en)}</button>`).join('')}</div>
+      <ol class="timeline" id="timeline">${m.events.map((ev, i) => `<li><button data-act="event" data-i="${i}"><span>${ev.label}</span><small>${m.fmtT(ev.s)}</small></button></li>`).join('')}</ol>
+      <div class="btn-row"><button class="btn" data-act="end">${tr('结束任务', 'End mission')}</button></div>
+      <div class="btn-row"><label class="check"><input type="checkbox" id="autoPace" ${S.autoPace ? 'checked' : ''}>${tr('自动调速（关键时刻放慢）', 'Auto pace (slows down at key moments)')}</label></div>`;
+  }
+  const kmh = v => Math.round(V3.len(v) * 3600).toLocaleString(tr('zh-CN', 'en-US'));
+  function starTelemetry(t) {
+    const m = S.mission, F = m.F, veh = F.veh, TL = m.mission.timeline;
+    const shipFull = veh.ship.dry + veh.ship.prop + F.payloadMass;
+    const b = F.boosterState(t), sh = F.shipState(t);
+    const bProp = clamp(((t < TL.stage ? b.m - shipFull : b.m) - veh.booster.dry) / veh.booster.prop, 0, 1);
+    const sProp = clamp((sh.m - veh.ship.dry - (t < TL.deploy[0] ? F.payloadMass : 0)) / veh.ship.prop, 0, 1);
+    return { b, sh, bProp, sProp, be: F.boosterEngines(t), se: F.shipEngines(t), altB: V3.len(b.r) - BODY.earth.radius, altS: V3.len(sh.r) - BODY.earth.radius };
+  }
+  function updateStarshipHud() {
+    const m = S.mission, t = m.tOf(S.jd), T = starTelemetry(t);
+    if ($('met')) {
+      $('met').textContent = m.fmtT(t);
+      const ph = m.phaseAt(S.jd);
+      $('phase').innerHTML = ph ? `<b>${ph.label}</b><span>${ph.detail}</span>` : `<b>${tr('发射准备', 'Pre-launch')}</b><span>${tr(`星舰矗立在${m.site.name}，推进剂加注完毕，罐体结满白霜`, `Starship stands on ${m.site.name}, fully loaded, its tanks frosted white`)}</span>`;
+      const rows = [
+        [tr('助推器', 'Booster'), `${Math.max(0, T.altB).toFixed(T.altB < 10 ? 2 : 1)} km · ${kmh(T.b.v)} km/h`],
+        [tr('飞船', 'Ship'), `${Math.max(0, T.altS).toFixed(T.altS < 10 ? 2 : 1)} km · ${kmh(T.sh.v)} km/h`],
+        [t < m.mission.timeline.stage ? tr('全箭质量', 'Stack mass') : tr('飞船质量', 'Ship mass'), `${Math.round(T.sh.m / 1000).toLocaleString(tr('zh-CN', 'en-US'))} t`],
+      ];
+      $('mstats').innerHTML = rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
+      [...$('timeline').children].forEach((li, i) => {
+        const ev = m.events[i], nx = m.events[i + 1];
+        li.className = S.jd >= ev.t ? (!nx || S.jd < nx.t ? 'now' : 'done') : '';
+      });
+      [...document.querySelectorAll('#mission [data-sv]')].forEach(b => b.classList.toggle('on', b.dataset.sv === S.starView));
+    }
+  }
+  // Webcast-style telemetry strip: speed, altitude, engine map and propellant for each stage
+  const ENG33 = (() => {
+    const L = [];
+    for (let k = 0; k < 3; k++) { const a = k * 2 * Math.PI / 3 + 0.5; L.push([Math.cos(a) * 0.95, Math.sin(a) * 0.95, 0.55]); }
+    for (let k = 0; k < 10; k++) { const a = k * 2 * Math.PI / 10; L.push([Math.cos(a) * 2.35, Math.sin(a) * 2.35, 0.55]); }
+    for (let k = 0; k < 20; k++) { const a = (k + 0.5) * 2 * Math.PI / 20; L.push([Math.cos(a) * 3.8, Math.sin(a) * 3.8, 0.5]); }
+    return L;
+  })();
+  const ENG6 = [0, 1, 2].map(k => [Math.sin(k * 2 * Math.PI / 3) * 1.35, Math.cos(k * 2 * Math.PI / 3) * 1.35, 0.62]).concat([0, 1, 2].map(k => [Math.sin(k * 2 * Math.PI / 3 + Math.PI / 3) * 3.1, Math.cos(k * 2 * Math.PI / 3 + Math.PI / 3) * 3.1, 1.05]));
+  const engSvg = (L, cls) => `<svg class="eng ${cls}" viewBox="-5 -5 10 10"><circle cx="0" cy="0" r="4.8" style="fill:none;stroke:rgba(150,172,210,.3)"></circle>${L.map(([x, y, r], i) => `<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="${r}" class="${cls === 's' && i > 2 ? 'vac' : ''}"></circle>`).join('')}</svg>`;
+  let starTeleBuilt = null;
+  function updateStarTelemetry() {
+    const el = $('starHud'), on = isStar();
+    if (el.hidden === on) el.hidden = !on;
+    document.body.classList.toggle('starhud', on);
+    if (!on) { starTeleBuilt = null; return; }
+    const m = S.mission, t = m.tOf(S.jd), T = starTelemetry(t);
+    if (starTeleBuilt !== m) {
+      starTeleBuilt = m;
+      const span = m.events[m.events.length - 1].s + 60, x = s => clamp((s + 60) / (span + 60) * 100, 0, 100);
+      el.innerHTML = `<div class="veh"><span class="vname">SUPER HEAVY · ${m.mission.serials[0]}</span>${engSvg(ENG33, 'b')}<div><div class="nums" id="stB"></div><div class="bars"><div class="bar"><i id="stBl"></i></div><div class="bar ch4"><i id="stBc"></i></div></div></div></div>
+        <div class="mid"><div class="met" id="stMet"></div><div class="ph" id="stPh"></div></div>
+        <div class="veh r"><span class="vname">STARSHIP · ${m.mission.serials[1]}</span><div><div class="nums" id="stS"></div><div class="bars"><div class="bar"><i id="stSl"></i></div><div class="bar ch4"><i id="stSc"></i></div></div></div>${engSvg(ENG6, 's')}</div>
+        <div class="strip">${m.events.map(e => `<i style="left:${x(e.s).toFixed(2)}%" title="${e.label}"></i>`).join('')}<b id="stNow"></b></div>`;
+      el._x = x;
+    }
+    const nums = (alt, v) => `<div><span>${tr('速度', 'SPEED')}</span>${kmh(v)} km/h</div><div><span>${tr('高度', 'ALT')}</span>${Math.max(0, alt).toFixed(alt < 10 ? 2 : 1)} km</div>`;
+    $('stB').innerHTML = nums(T.altB, T.b.v);
+    $('stS').innerHTML = nums(T.altS, T.sh.v);
+    $('stBl').style.width = `${(T.bProp * 100).toFixed(1)}%`; $('stBc').style.width = `${(Math.min(1, T.bProp * 1.02) * 100).toFixed(1)}%`;
+    $('stSl').style.width = `${(T.sProp * 100).toFixed(1)}%`; $('stSc').style.width = `${(Math.min(1, T.sProp * 1.03) * 100).toFixed(1)}%`;
+    $('stMet').textContent = m.fmtT(t);
+    const ph = m.phaseAt(S.jd);
+    $('stPh').textContent = ph ? ph.label : tr('发射准备', 'Pre-launch');
+    el.querySelectorAll('.eng.b circle').forEach((c, i) => { if (i) c.classList.toggle('on', i - 1 < T.be.n); });
+    el.querySelectorAll('.eng.s circle').forEach((c, i) => { if (i) { const k = i - 1; c.classList.toggle('on', k < 3 ? k < T.se.rsl : k - 3 < T.se.rvac); } });
+    el.querySelectorAll('.strip i').forEach((d, i) => { const e = m.events[i], nx = m.events[i + 1]; d.className = S.jd >= e.t ? (!nx || S.jd < nx.t ? 'now' : 'done') : ''; });
+    $('stNow').style.left = `${el._x(t).toFixed(2)}%`;
+  }
+  // Ground tracker follows whichever vehicle is busy; it hands over automatically at staging and after the landing
+  function autoTrack() {
+    if (!isStar() || S.mode !== 'surface' || !S.autoFov || !STAR_R[S.surf.track]) return;
+    const want = busyVehicle(S.mission.tOf(S.jd));
+    if (S.surf.track !== want && S.surf.track !== 'pad') { S.surf.track = want; renderLookBtns(); }
+  }
+
   // ─── Cockpit HUD ──────────────────────────────────────────────────────────
   function renderCockpitHud() {
     const m = S.mission;
@@ -915,6 +1179,15 @@
       $('cockRead').innerHTML = `<b>${tr('国际空间站 · 穹顶舱', 'ISS · Cupola')}</b> · ${lit ? tr('阳光下', 'in sunlight') : tr('地球阴影中（夜晚）', "in Earth's shadow (night)")}<br>` + tr(
         `高度 ${fmtKm(V3.len(f.r) - BODY.earth.radius)} · 速度 ${V3.len(ISS.velGeo(S.jd)).toFixed(2)} km/s · 正下方 ${ll} · 视场 ${S.cock.fov.toFixed(0)}°`,
         `Altitude ${fmtKm(V3.len(f.r) - BODY.earth.radius)} · ${V3.len(ISS.velGeo(S.jd)).toFixed(2)} km/s · below: ${ll} · FOV ${S.cock.fov.toFixed(0)}°`);
+      return;
+    }
+    if ((S.vehicle === 'ship' || S.vehicle === 'booster') && isStar()) {
+      const m = S.mission, t = m.tOf(S.jd), T = starTelemetry(t), ship = S.vehicle === 'ship', ph = m.phaseAt(S.jd);
+      const st = ship ? T.sh : T.b, alt = ship ? T.altS : T.altB;
+      const n = ship ? T.se.rsl + T.se.rvac : T.be.n;
+      const engine = n ? `<em class="hot">${tr(`${n} 台发动机点火`, `${n} engine${n > 1 ? 's' : ''} firing`)}</em>` : t < 0 ? tr('待发射', 'Awaiting liftoff') : tr('发动机关机', 'Engines off');
+      $('cockRead').innerHTML = `<b>${ship ? tr('飞船摄像头', 'Ship camera') : tr('助推器摄像头', 'Booster camera')} · ${ph ? ph.label : tr('发射准备', 'Pre-launch')}</b> · ${engine}<br>` +
+        tr(`高度 ${fmtKm(Math.max(0, alt))} · 对地速度 ${kmh(st.v)} km/h · 视场 ${S.cock.fov.toFixed(0)}°`, `Altitude ${fmtKm(Math.max(0, alt))} · ground speed ${kmh(st.v)} km/h · FOV ${S.cock.fov.toFixed(0)}°`);
       return;
     }
     if (!S.cs) return;
@@ -979,6 +1252,7 @@
   }
   function updateSurfaceRead(pos, cam) {
     if (S.mode !== 'surface' || !cam.frame) return;
+    if (S.autoFov) syncFov();
     const s = S.surf, f = cam.frame;
     const zh = I18N.lang === 'zh', az = ((s.az / DEG % 360 + 360) % 360).toFixed(0), alt = (s.alt / DEG).toFixed(1);
     let txt = zh ? `看向 <em>${dirName(s.az)}</em> ${az}° · 高度 ${alt}°` : `Looking <em>${dirName(s.az)}</em> ${az}° · altitude ${alt}°`;
@@ -1005,7 +1279,10 @@
   function frame(now) {
     const dt = Math.min((now - lastT) / 1000, 0.1);
     lastT = now;
-    if (S.mission && S.autoPace && !S.paused) {
+    if (S.mission && S.autoPace && !S.paused && S.mission.paceAt) {
+      const r = S.mission.paceAt(S.jd);
+      if (r == null) { S.autoPace = false; S.rate = 60; refreshTimeUI(); renderMissionHud(); } else { S.rate = r; S.reverse = false; }
+    } else if (S.mission && S.autoPace && !S.paused) {
       const nx = S.mission.nextEvent(S.jd);
       if (nx) {
         const sec = (nx.t - S.jd) * DAY, pre = S.jd < S.mission.tLaunch;
@@ -1016,7 +1293,8 @@
     if (!S.paused) S.jd = clamp(S.jd + (S.reverse ? -1 : 1) * S.rate * dt / DAY, JD_MIN, JD_MAX);
     const pos = allPositions(S.jd);
     S.cs = craftState(S.jd, pos);
-    if (S.mode === 'cockpit' && S.vehicle === 'rocket' && !S.cs) { S.mode = 'orbit'; refreshUI(); }
+    if (S.mode === 'cockpit' && S.vehicle !== 'iss' && !S.cs) { S.mode = 'orbit'; S.orbit.target = STAR_R[S.orbit.target] ? 'earth' : S.orbit.target; refreshUI(); }
+    autoTrack();
     const cam = computeCamera(S.jd, pos);
     let sunVis = 1, starDim = 1;
     if (cam.surface) {
@@ -1049,6 +1327,7 @@
       updateCockpitHud(pos, cam);
       renderInfo(pos, cam);
       updateMissionHud(pos);
+      updateStarTelemetry();
     }
     placePrograde(cam);
     if (first) { first = false; $('loading').classList.add('gone'); setTimeout(() => $('loading').remove(), 800); }
@@ -1069,7 +1348,7 @@
   I18N.onChange(() => {
     renderLists();
     infoKey = '';
-    missionHudBuilt = null;
+    missionHudBuilt = null; starHudBuilt = null; starTeleBuilt = null;
     for (const [id, key] of TOGGLES) setToggle(key, S.toggles[key]);
     refreshMissionUI();
     renderCockpitHud();
@@ -1087,6 +1366,16 @@
   if (hash === 'light') setTimeout(() => emitPulse('sun'), 100);
   if (hash === 'eclipse-solar') setTimeout(() => $('btnSolar').click(), 100);
   if (hash === 'eclipse-lunar') setTimeout(() => $('btnLunar').click(), 100);
+  if (hash === 'starship' || hash.startsWith('starship-')) {
+    // Deep link: #starship, #starship-flight10, #starship-flight8catch@400:chase-booster (T+400 s, chase camera)
+    const [, id, at, cam] = hash.match(/^starship-?([\w]*)(?:@(-?[\d.]+))?(?::([\w-]+))?/) || [];
+    if (STARSHIP_MISSIONS.some(x => x.id === id)) S.star.id = id;
+    S.tab = 'starship';
+    setTimeout(() => launchStarship(() => {
+      if (at != null) { S.jd = S.mission.tLaunch + +at / DAY; S.trans = null; }
+      if (cam && STAR_VIEWS.some(v => v[0] === cam)) { starView(cam); S.trans = null; }
+    }), 100);
+  }
   if (hash.startsWith('mission-')) { // deep link: #mission-moon, #mission-mars …
     S.plan.target = hash.slice(8);
     setTimeout(() => { planFor(); if (S.plan.target === 'moon') launch(S.plan.result); else launchPlanet(S.plan.pick.td, S.plan.pick.tof); }, 100);
@@ -1094,7 +1383,7 @@
   refreshTimeUI();
   refreshUI();
   refreshMissionUI();
-  if (!hash.startsWith('mission-') && hash !== 'cockpit-moon') setTimeout(planFor, 50);
+  if (!hash.startsWith('mission-') && hash !== 'cockpit-moon' && !hash.startsWith('starship')) setTimeout(planFor, 50);
   requestAnimationFrame(frame);
   setTimeout(() => toast(tr('拖动旋转视角 · 滚轮或双指缩放 · 左侧切换视角，底部控制时间', 'Drag to rotate · scroll or pinch to zoom · views on the left, time controls below')), 1200);
 })();

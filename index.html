@@ -178,6 +178,63 @@ select { background: var(--panel-solid); border: 1px solid var(--rule-strong); b
 .check { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--dim); cursor: pointer; }
 .check input { accent-color: var(--sol); margin: 0; }
 
+/* Mission drawer: deep-space / Starship tabs, Starship flight list */
+.tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 12px; padding: 3px; border-radius: 8px; background: rgba(150, 172, 210, 0.07); }
+.tabs button { border: 0; background: transparent; border-radius: 6px; padding: 5px 4px; font-size: 12.5px; color: var(--dim); }
+.tabs button.on { background: var(--ink); color: var(--void); font-weight: 500; }
+.flights { display: grid; gap: 4px; }
+.flight { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; text-align: left; padding: 7px 10px; border-radius: 7px; border: 1px solid transparent; background: transparent; }
+.flight:hover { background: rgba(150, 172, 210, 0.08); }
+.flight.on { border-color: rgba(255, 178, 62, 0.45); background: rgba(255, 178, 62, 0.08); }
+.flight b { font-weight: 500; font-size: 13px; }
+.flight.on b { color: var(--sol); }
+.flight small { color: var(--dim); font-size: 11.5px; }
+.flight .when { font: 11px var(--mono); color: var(--faint); align-self: start; }
+.facts { margin: 8px 0 0; padding-left: 16px; color: #c9d1de; font-size: 12px; line-height: 1.55; }
+.facts li + li { margin-top: 3px; }
+.seg.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.optrow { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 8px; color: var(--dim); font-size: 12px; }
+.camgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; margin-top: 10px; }
+.camgrid .btn { text-align: left; padding: 6px 9px; }
+.camgrid .btn.on { border-color: rgba(255, 178, 62, 0.55); color: var(--sol); }
+
+/* Starship telemetry strip, webcast style */
+#starHud { left: 50%; transform: translateX(-50%); bottom: calc(70px + env(safe-area-inset-bottom, 0px)); width: min(820px, calc(100% - 32px)); padding: 8px 14px 9px; display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 4px 16px; align-items: center; pointer-events: none; }
+#starHud .veh { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; align-items: center; }
+#starHud .veh.r { grid-template-columns: minmax(0, 1fr) auto; text-align: right; }
+#starHud .vname { grid-column: 1 / -1; font: 600 10.5px var(--sans); letter-spacing: 0.16em; color: var(--dim); }
+#starHud .eng { width: 54px; height: 54px; }
+#starHud .eng circle { fill: rgba(150, 172, 210, 0.16); stroke: rgba(150, 172, 210, 0.35); stroke-width: 0.6; }
+#starHud .eng circle.on { fill: #fff4dc; stroke: #ffb23e; filter: drop-shadow(0 0 2px #ff9a3c); }
+#starHud .eng circle.vac { stroke-width: 1; }
+#starHud .nums { display: grid; gap: 1px; font: 500 13px/1.25 var(--mono); font-variant-numeric: tabular-nums; }
+#starHud .nums span { color: var(--faint); font-size: 10px; letter-spacing: 0.1em; margin-right: 6px; font-family: var(--sans); }
+#starHud .bars { display: grid; gap: 3px; margin-top: 3px; }
+#starHud .bar { height: 3px; border-radius: 2px; background: rgba(150, 172, 210, 0.18); overflow: hidden; }
+#starHud .bar i { display: block; height: 100%; background: #c9d1de; }
+#starHud .bar.ch4 i { background: #8fb4ff; }
+#starHud .mid { text-align: center; min-width: 150px; }
+#starHud .met { font: 500 22px var(--mono); font-variant-numeric: tabular-nums; letter-spacing: 0.03em; }
+#starHud .ph { color: var(--sol); font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; margin: 0 auto; }
+#starHud .strip { grid-column: 1 / -1; position: relative; height: 16px; margin-top: 2px; }
+#starHud .strip::before { content: ""; position: absolute; left: 0; right: 0; top: 7px; height: 1px; background: var(--rule-strong); }
+#starHud .strip i { position: absolute; top: 4px; width: 7px; height: 7px; margin-left: -3.5px; border-radius: 50%; border: 1px solid var(--faint); background: var(--void); }
+#starHud .strip i.done { background: var(--dim); border-color: var(--dim); }
+#starHud .strip i.now { background: var(--sol); border-color: var(--sol); box-shadow: 0 0 6px var(--sol); }
+#starHud .strip b { position: absolute; top: 2px; width: 2px; height: 11px; margin-left: -1px; background: var(--sol); }
+body.starhud .ctxhud { bottom: auto; top: calc(150px + env(safe-area-inset-top, 0px)); width: min(560px, calc(100% - 32px)); }
+body.starhud #scalebar { bottom: calc(196px + env(safe-area-inset-bottom, 0px)); }
+/* With the telemetry up, the ground-view HUD shrinks to one row so the tracked rocket stays clear */
+body.starhud #surfaceHud #surfRead, body.starhud #surfaceHud .zoom, body.starhud #btnPass { display: none; }
+@media (max-width: 520px) {
+  #starHud .eng { display: none; }
+  #starHud .veh, #starHud .veh.r { grid-template-columns: minmax(0, 1fr); }
+  #starHud .vname { font-size: 9.5px; letter-spacing: 0.06em; }
+  #starHud .nums { font-size: 11px; }
+  #starHud .nums span { margin-right: 3px; }
+}
+
 /* Contextual HUDs (surface / onboard) */
 .ctxhud { left: 50%; transform: translateX(-50%); bottom: calc(76px + env(safe-area-inset-bottom, 0px)); padding: 10px 12px; display: grid; gap: 8px; width: min(620px, calc(100% - 32px)); }
 .sh-top { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
@@ -264,6 +321,14 @@ body.imm [data-chrome], body.imm #prograde { display: none !important; }
   body[data-panel="info"] #infoToggle .ico { display: none; }
   #dock { left: 16px; right: 16px; transform: none; max-width: none; justify-content: space-between; }
   .ctxhud { bottom: calc(136px + env(safe-area-inset-bottom, 0px)); }
+  #starHud { left: 16px; right: 16px; width: auto; transform: none; bottom: calc(126px + env(safe-area-inset-bottom, 0px)); padding: 6px 10px; gap: 2px 8px; }
+  #starHud .eng { width: 38px; height: 38px; }
+  #starHud .nums { font-size: 11.5px; }
+  #starHud .met { font-size: 17px; }
+  #starHud .mid { min-width: 96px; }
+  #starHud .ph { max-width: 120px; font-size: 11px; }
+  body.starhud .ctxhud { top: calc(118px + env(safe-area-inset-top, 0px)); }
+  body:not([data-panel="none"]) #starHud { display: none; }
   body:not([data-panel="none"]) .ctxhud { display: none; }
   #scalebar { bottom: calc(136px + env(safe-area-inset-bottom, 0px)); }
   #timePop { bottom: calc(68px + env(safe-area-inset-bottom, 0px)); }
@@ -336,7 +401,7 @@ body.imm [data-chrome], body.imm #prograde { display: none !important; }
   </section>
   <section>
     <h2 data-en="Credits">致谢</h2>
-    <p class="credit" data-en='Planet textures © <a href="https://www.solarsystemscope.com/textures/" target="_blank" rel="noopener">Solar System Scope</a>, CC BY 4.0 · Moon colour and relief: <a href="https://svs.gsfc.nasa.gov/4720" target="_blank" rel="noopener">NASA SVS CGI Moon Kit</a> (LRO LROC/LOLA) · Close-up Earth imagery: <a href="https://earthdata.nasa.gov/gibs" target="_blank" rel="noopener">NASA GIBS</a> (Blue Marble, VIIRS Black Marble), land/water © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors · Stars and constellation lines: d3-celestial (BSD-3) · Ephemeris: JPL approximate orbital elements · ISS orbit: CelesTrak TLE'>行星贴图 © <a href="https://www.solarsystemscope.com/textures/" target="_blank" rel="noopener">Solar System Scope</a>，CC BY 4.0 · 月球颜色与地形：<a href="https://svs.gsfc.nasa.gov/4720" target="_blank" rel="noopener">NASA SVS CGI Moon Kit</a>（LRO LROC/LOLA）· 地球近景影像：<a href="https://earthdata.nasa.gov/gibs" target="_blank" rel="noopener">NASA GIBS</a>（Blue Marble、VIIRS Black Marble），海陆数据 © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> 贡献者 · 星表与星座连线：d3-celestial（BSD-3）· 星历：JPL 近似轨道根数 · 空间站轨道：CelesTrak TLE</p>
+    <p class="credit" data-en='Planet textures © <a href="https://www.solarsystemscope.com/textures/" target="_blank" rel="noopener">Solar System Scope</a>, CC BY 4.0 · Moon colour and relief: <a href="https://svs.gsfc.nasa.gov/4720" target="_blank" rel="noopener">NASA SVS CGI Moon Kit</a> (LRO LROC/LOLA) · Close-up Earth imagery: <a href="https://earthdata.nasa.gov/gibs" target="_blank" rel="noopener">NASA GIBS</a> (Blue Marble, VIIRS Black Marble), land/water © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors · Stars and constellation lines: d3-celestial (BSD-3) · Ephemeris: JPL approximate orbital elements · ISS orbit: CelesTrak TLE · Starship timelines: SpaceX flight updates and webcasts'>行星贴图 © <a href="https://www.solarsystemscope.com/textures/" target="_blank" rel="noopener">Solar System Scope</a>，CC BY 4.0 · 月球颜色与地形：<a href="https://svs.gsfc.nasa.gov/4720" target="_blank" rel="noopener">NASA SVS CGI Moon Kit</a>（LRO LROC/LOLA）· 地球近景影像：<a href="https://earthdata.nasa.gov/gibs" target="_blank" rel="noopener">NASA GIBS</a>（Blue Marble、VIIRS Black Marble），海陆数据 © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> 贡献者 · 星表与星座连线：d3-celestial（BSD-3）· 星历：JPL 近似轨道根数 · 空间站轨道：CelesTrak TLE · 星舰时间线：SpaceX 飞行公告与直播</p>
   </section>
 </section>
 
@@ -361,6 +426,8 @@ body.imm [data-chrome], body.imm #prograde { display: none !important; }
   <div class="sh-read" id="cockRead"></div>
 </div>
 <div id="prograde" hidden title="飞行方向" data-en-title="Direction of flight"><svg viewBox="0 0 30 30" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="15" cy="15" r="6"/><path d="M15 3v6M3 15h6M21 15h6"/></svg></div>
+
+<div class="hud panel" id="starHud" hidden data-chrome aria-live="off"></div>
 
 <div class="hud" id="scalebar" data-chrome><div class="bar" id="scaleBar"></div><span id="scaleText"></span></div>
 
@@ -400,8 +467,11 @@ body.imm [data-chrome], body.imm #prograde { display: none !important; }
 <script src="assets/sky.js"></script>
 <script src="js/astro.js"></script>
 <script src="js/missions.js"></script>
+<script src="js/starship-data.js"></script>
+<script src="js/starship.js"></script>
 <script src="js/iss.js"></script>
 <script src="js/tiles.js"></script>
+<script src="js/starship-scene.js"></script>
 <script src="js/scene.js"></script>
 <script src="js/app.js"></script>
 </body>

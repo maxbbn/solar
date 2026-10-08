@@ -24,7 +24,7 @@ const BUNDLES = {
   vendor: [require.resolve('three/build/three.min.js')],
   // Star catalog; the texture manifest is prepended at build time.
   data: ['assets/sky.js'],
-  app: ['js/i18n.js', 'js/astro.js', 'js/missions.js', 'js/iss.js', 'js/tiles.js', 'js/scene.js', 'js/app.js'],
+  app: ['js/i18n.js', 'js/astro.js', 'js/missions.js', 'js/starship-data.js', 'js/starship.js', 'js/iss.js', 'js/tiles.js', 'js/starship-scene.js', 'js/scene.js', 'js/app.js'],
 };
 
 rmSync(out, { recursive: true, force: true });
