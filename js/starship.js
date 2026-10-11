@@ -544,8 +544,9 @@ const Starship = (() => {
     for (let i = 0; i < nS; i++) {
       const t0 = satsWhen[i], s = ship.at(t0), [n, b] = shipFrame(t0);
       const door = mul(b, -1); // leeward side
-      const r = add(mul(s.r, 1000), add(mul(n, 30 + (i % 2) * 0.3), mul(door, 4.9)));
-      const v = add(add(mul(s.v, 1000), mul(door, 0.45)), mul(n, -0.02 * (i % 3)));
+      // The dispenser pushes each one out through the door, 30 m above the ship's base (js/starship-scene.js)
+      const r = add(mul(s.r, 1000), add(mul(n, 30), mul(door, 4.9)));
+      const v = add(mul(s.v, 1000), mul(door, 0.45));
       // Same force model as the ship while they are close (so the relative motion is right),
       // then an analytic orbit for the long run
       const near = new Track(), m = mission.payload.mass, orbital = shipProfile === 'orbital';

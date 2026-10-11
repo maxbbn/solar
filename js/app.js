@@ -221,10 +221,13 @@
     const N = M3.apply(R, n0), B = M3.apply(R, b0), X = V3.cross(N, B);
     const out = which === 'ship' ? V3.mul(B, -1) : X; // camera looks out from this side of the hull
     const base = m.world(st.r, jd, pos.earth);
-    const C = V3.add(base, V3.add(V3.mul(N, which === 'ship' ? 0.036 : F.veh.booster.h / 1000 - 0.012), V3.mul(out, 0.0058)));
+    const doorCam = which === 'ship' && k.look === 'door'; // on a boom below the payload slot, looking up at it
+    const C = V3.add(base, doorCam ? V3.add(V3.mul(N, 0.0215), V3.mul(out, 0.0150))
+      : V3.add(V3.mul(N, which === 'ship' ? 0.036 : F.veh.booster.h / 1000 - 0.012), V3.mul(out, 0.0058)));
     const F0 = V3.mul(N, -1), right = V3.cross(F0, out);
-    if (k.track) {
-      const d = V3.norm(V3.sub(targetPos(k.track, pos, jd), C));
+    if (k.track || doorCam) {
+      const aim = doorCam ? V3.add(base, V3.add(V3.mul(N, 0.0305), V3.mul(out, 0.0045))) : targetPos(k.track, pos, jd);
+      const d = V3.norm(V3.sub(aim, C));
       k.yaw = Math.atan2(V3.dot(d, right), V3.dot(d, F0)); k.pitch = Math.asin(clamp(V3.dot(d, out), -1, 1));
     }
     const cy = Math.cos(k.yaw), sy = Math.sin(k.yaw), cp = Math.cos(k.pitch), sp = Math.sin(k.pitch);
@@ -378,7 +381,7 @@
   const COCK_LOOKS = {
     rocket: [['back', '回望箭体', 'Look aft'], ['fwd', '前方', 'Forward'], ['earth', '看地球', 'Earth'], ['target', '看目的地', 'Target']],
     iss: [['limb', '地平线', 'Horizon'], ['nadir', '正下方', 'Straight down'], ['moon', '看月亮', 'Moon']],
-    ship: [['aft', '回望船尾', 'Look aft'], ['out', '向外', 'Outward'], ['fwd', '向前', 'Forward'], ['earth', '看地球', 'Earth']],
+    ship: [['aft', '回望船尾', 'Look aft'], ['door', '载荷舱门', 'Payload door'], ['out', '向外', 'Outward'], ['fwd', '向前', 'Forward'], ['earth', '看地球', 'Earth']],
     booster: [['aft', '俯视箭体', 'Down the hull'], ['out', '向外', 'Outward'], ['fwd', '向上', 'Up'], ['earth', '看地球', 'Earth']],
   };
   function setCockpit(look, vehicle = 'rocket') {
@@ -389,7 +392,7 @@
     S.vehicle = vehicle;
     S.view = vehicle === 'iss' ? 'cupola' : 'cockpit';
     const deploying = vehicle === 'ship' && isStar() && (t => t > S.mission.mission.timeline.deploy[0] - 30 && t < S.mission.mission.timeline.deploy[1] + 60)(S.mission.tOf(S.jd));
-    if (!look) look = vehicle === 'iss' ? 'limb' : deploying ? 'out' : vehicle === 'ship' || vehicle === 'booster' ? 'aft' : S.jd < S.mission.tBurn + 0.05 ? 'back' : 'fwd';
+    if (!look) look = vehicle === 'iss' ? 'limb' : deploying ? 'door' : vehicle === 'ship' || vehicle === 'booster' ? 'aft' : S.jd < S.mission.tBurn + 0.05 ? 'back' : 'fwd';
     if (vehicle === 'ship' || vehicle === 'booster') S.view = null;
     S.cock.fov = 70;
     setCockLook(look);
@@ -1063,7 +1066,13 @@
       setOrbit('pad', 0.42, 215 * DEG, 14 * DEG, 50, 'enu');
     } else if (id === 'chase-ship' || id === 'chase-booster') {
       const which = id.slice(6);
-      setOrbit(which, t < m.mission.timeline.stage ? 0.3 : which === 'ship' ? 0.17 : 0.2, 205 * DEG, 10 * DEG, 50, 'enu');
+      const dep = m.mission.timeline.deploy, deploying = which === 'ship' && t > dep[0] - 90 && t < dep[1] + 60;
+      let yaw = 205 * DEG;
+      if (deploying) { // beside the ship and a little below it: the payload door faces Earth during deployment
+        const pos = allPositions(S.jd), T = starPos('ship', pos, S.jd), B = enuBasis(T, pos, S.jd), v = M3.apply(bodyRot('earth', S.jd), F.shipState(t).v);
+        yaw = Math.atan2(V3.dot(v, B[1]), V3.dot(v, B[0])) - 70 * DEG;
+      }
+      setOrbit(which, t < m.mission.timeline.stage ? 0.3 : which === 'ship' ? (deploying ? 0.08 : 0.17) : 0.2, yaw, deploying ? -24 * DEG : 10 * DEG, 50, 'enu');
     } else if (id === 'cam-ship' || id === 'cam-booster') {
       setCockpit(null, id.slice(4));
       S.starView = id;

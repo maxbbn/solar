@@ -195,40 +195,141 @@ function StarshipLayer(o) {
     for (let k = 0; k < 3; k++) { const a = k * 2 * Math.PI / 3 + Math.PI / 3; L.push([Math.sin(a) * 3.1, Math.cos(a) * 3.1, 1]); }
     return L;
   })();
-  function buildShip(veh) {
-    const h = veh.ship.h, body = 33, g = new THREE.Group(), R = 4.5;
-    const frost = y => (y > 3 && y < 20 ? 0.6 : y > 21 && y < 28 ? 0.45 : 0) * ss(2, 5, y);
+  // Payload: Starlink satellites ride flat, stacked one above another on two rails ("Pez"
+  // dispenser) above a slot door in the leeward hull. Each is pushed out horizontally through
+  // the door, then the stack steps down so the next one lines up with the slot.
+  const DOOR_Y = 30;                // slot centre, metres above the ship's base (the physics releases satellites here)
+  const SLIDE_V = 0.45, SLIDE_OUT = 4.9; // push-out speed (m/s) and where free flight takes over (m from the axis)
+  const SLIDE = SLIDE_OUT / SLIDE_V;
+  const satDims = type => (type === 'v3' ? [5.6, 0.35, 3.0] : [4.1, 0.3, 2.7]); // width, thickness, depth (m)
+  const satMats = (() => {
+    const side = new THREE.MeshStandardMaterial({ color: 0x2f3237, metalness: 0.5, roughness: 0.5, envMap: envTex });
+    const top = new THREE.MeshStandardMaterial({ color: 0xb9bec6, metalness: 0.85, roughness: 0.28, envMap: envTex });
+    const bottom = new THREE.MeshStandardMaterial({ color: 0x1d1f23, metalness: 0.3, roughness: 0.7, envMap: envTex });
+    return [side, side, top, bottom, side, side]; // BoxGeometry faces: +X −X +Y −Y +Z −Z
+  })();
+  const satGeometry = type => { const [w, t, d] = satDims(type); return new THREE.BoxGeometry(w, t, d); };
+
+  function buildShip(veh, payload) {
+    const h = veh.ship.h, body = 33, g = new THREE.Group(), R = 4.5, TAU = 2 * Math.PI;
+    const frost = y => (y > 3 && y < 20 ? 0.6 : y > 21 && y < 27 ? 0.45 : 0) * ss(2, 5, y);
     const bodyMap = shipTex(body, 0, frost), bodyMask = shipTex(body, 0, frost, true);
-    const mk = (map, mask) => new THREE.MeshStandardMaterial({ color: 0xffffff, map, metalness: 1, roughness: 1, metalnessMap: mrTex(true), roughnessMap: mrTex(true),
-      envMap: envTex, emissive: 0x000000, emissiveMap: mask });
+    const mk = (map, mask, side = THREE.FrontSide) => new THREE.MeshStandardMaterial({ color: 0xffffff, map, metalness: 1, roughness: 1, metalnessMap: mrTex(true), roughnessMap: mrTex(true),
+      envMap: envTex, emissive: 0x000000, emissiveMap: mask, side });
     const bodyMat = mk(bodyMap, bodyMask);
-    const cyl = new THREE.Mesh(new THREE.CylinderGeometry(R, R, body, 72, 1, true), bodyMat);
-    cyl.position.y = body / 2; g.add(cyl);
+    // Hull, built in pieces so the payload slot is a real opening; UVs are remapped so the
+    // weld seams and tiles run continuously across the pieces
+    const [sw, st, sd] = satDims(payload.type);
+    const DW = sw + 0.8, DH = 1.25, half = DW / 2 / R, y0 = DOOR_Y - DH / 2, y1 = DOOR_Y + DH / 2;
+    const hull = (ya, yb, th0, thL) => {
+      const geo = new THREE.CylinderGeometry(R, R, yb - ya, Math.max(6, Math.round(96 * thL / TAU)), 1, true, th0, thL);
+      const uv = geo.attributes.uv;
+      for (let i = 0; i < uv.count; i++) uv.setXY(i, (th0 + uv.getX(i) * thL) / TAU, (ya + uv.getY(i) * (yb - ya)) / body);
+      geo.translate(0, (ya + yb) / 2, 0);
+      return geo;
+    };
+    g.add(new THREE.Mesh(merge([hull(0, y0, 0, TAU), hull(y0, y1, Math.PI + half, TAU - 2 * half), hull(y1, body, 0, TAU)]), bodyMat));
     // Nose: tangent ogive, full radius at its base (y = 0), closing to the tip at y = Ln
-    const pts = [], Ln = h - body;
-    for (let i = 0; i <= 24; i++) {
-      const s = i / 24, rho = (R * R + Ln * Ln) / (2 * R), y = s * Ln;
-      pts.push(new THREE.Vector2(Math.max(0.05, Math.sqrt(Math.max(0, rho * rho - y * y)) + R - rho), body + y));
-    }
+    const pts = [], Ln = h - body, rho = (R * R + Ln * Ln) / (2 * R);
+    for (let i = 0; i <= 32; i++) { const y = i / 32 * Ln; pts.push(new THREE.Vector2(Math.max(0.04, Math.sqrt(Math.max(0, rho * rho - y * y)) + R - rho), body + y)); }
+    const rAt = y => (y <= body ? R : Math.sqrt(Math.max(0, rho * rho - (y - body) ** 2)) + R - rho);
     const noseMat = mk(shipTex(Ln, body, () => 0), shipTex(Ln, body, () => 0, true));
-    g.add(new THREE.Mesh(new THREE.LatheGeometry(pts, 72), noseMat));
+    g.add(new THREE.Mesh(new THREE.LatheGeometry(pts, 96), noseMat));
+    // Aft skirt and dome; leeward raceway
+    const skirt = new THREE.Mesh(new THREE.CylinderGeometry(R + 0.03, R + 0.03, 1.3, 96, 1, true), dark); skirt.position.y = 0.65; g.add(skirt);
     const base = new THREE.Mesh(new THREE.CircleGeometry(R, 48), dark); base.rotation.x = Math.PI / 2; base.position.y = 0.6; g.add(base);
-    // Flaps: tiles on the windward (+Z) face, steel behind
-    const flapMats = [dark, dark, dark, dark, tileMat, plainSteel];
-    const rAt = y => y <= body ? R : pts.reduce((a, p) => (Math.abs(p.y - y) < Math.abs(a.y - y) ? p : a)).x;
+    const rw = Math.PI - half - 0.22; // raceway runs beside the door
+    g.add(new THREE.Mesh(merge([box(0.45, body - 4, 0.35, Math.sin(rw) * (R + 0.1), (body - 4) / 2 + 2, Math.cos(rw) * (R + 0.1))]), dark));
+
+    // Flaps: swept trapezoids, heat-shield tiles on the windward (+Z) face, steel behind,
+    // each on a hinge (pivot rotation.y folds it towards the leeward side)
+    const flapMesh = (P, s, t) => {
+      const shape = new THREE.Shape(P.map(([x, y]) => new THREE.Vector2(s * x, y)));
+      const tile = new THREE.ExtrudeGeometry(shape, { depth: t / 2, bevelEnabled: false });
+      const steel = new THREE.ExtrudeGeometry(shape, { depth: t / 2, bevelEnabled: false }); steel.translate(0, 0, -t / 2);
+      const grp = new THREE.Group();
+      grp.add(new THREE.Mesh(tile, tileMat), new THREE.Mesh(steel, plainSteel));
+      return grp;
+    };
+    const flaps = { aft: [], fwd: [] };
+    const AFT = [[0, 0], [4.5, 1.1], [4.1, 9.4], [0, 11.4]], FWD = [[0, 0], [3.0, 1.3], [2.8, 4.7], [0, 6.8]];
     for (const s of [-1, 1]) {
-      const aft = new THREE.Mesh(new THREE.BoxGeometry(4.4, 11, 0.55), flapMats); aft.position.set(s * (R + 2.15), 7.2, 0.9); g.add(aft);
-      const fy = body + 9, fr = rAt(fy);
-      const fwd = new THREE.Mesh(new THREE.BoxGeometry(3.0, 7.2, 0.45), flapMats); fwd.position.set(s * (fr + 1.4), fy, -0.4); fwd.rotation.z = s * 0.08; g.add(fwd);
+      const zA = 0.7, aft = new THREE.Group();
+      aft.position.set(s * Math.sqrt(R * R - zA * zA), 1.4, zA);
+      aft.add(flapMesh(AFT, s, 0.55));
+      g.add(aft); aft.userData.s = s; flaps.aft.push(aft);
+      g.add(new THREE.Mesh(merge([box(0.8, 11.6, 1.1, s * (R + 0.15), 1.4 + 5.8, zA)]), dark)); // hinge fairing
+      // Forward flaps sit on the nose, a little towards the leeward side, leaning with its taper
+      const fy = body + 4, fy2 = fy + 6.8, zF = -0.8, rf = rAt(fy), lean = Math.atan((rAt(fy) - rAt(fy2)) / 6.8);
+      const holder = new THREE.Group(), fwd = new THREE.Group();
+      holder.position.set(s * Math.sqrt(rf * rf - zF * zF), fy, zF); holder.rotation.z = s * lean;
+      fwd.add(flapMesh(FWD, s, 0.45)); holder.add(fwd); g.add(holder);
+      fwd.userData.s = s; flaps.fwd.push(fwd);
+      const fair = new THREE.Mesh(new THREE.BoxGeometry(0.7, 7.1, 0.9), dark); fair.position.set(s * 0.1, 3.4, 0); holder.add(fair);
     }
-    // Payload door ("Pez" slot) on the leeward side, and the hinge fairings
-    g.add(new THREE.Mesh(merge([box(5.2, 1.1, 0.4, 0, 30, -R + 0.1), box(0.5, 9, 0.5, R - 0.1, 7.5, 0.7), box(0.5, 9, 0.5, -R + 0.1, 7.5, 0.7)]), new THREE.MeshStandardMaterial({ color: 0x0c0d0f, roughness: 0.9 })));
+
+    // Payload bay seen through the slot: dark inner wall following the hull and nose, a floor,
+    // the slot's sills and jambs, the two dispenser rails, a pusher
+    const bayPts = [new THREE.Vector2(0.01, DOOR_Y - 2.5), new THREE.Vector2(R - 0.12, DOOR_Y - 2.5)];
+    for (let y = DOOR_Y - 2.5; y <= h - 6; y += 0.5) bayPts.push(new THREE.Vector2(Math.max(0.05, rAt(y) - 0.12), y));
+    const bayMat = new THREE.MeshStandardMaterial({ color: 0x3a3d43, metalness: 0.4, roughness: 0.7, side: THREE.BackSide, envMap: envTex, envMapIntensity: 0.3 });
+    g.add(new THREE.Mesh(new THREE.LatheGeometry(bayPts, 48), bayMat));
+    const cz = -R * Math.cos(half), frame = [];
+    frame.push(box(DW, 0.12, 0.4, 0, y0, cz + 0.15), box(DW, 0.12, 0.4, 0, y1, cz + 0.15));
+    for (const s of [-1, 1]) frame.push(box(0.12, DH, 0.4, s * R * Math.sin(half), DOOR_Y, cz + 0.15));
+    const railX = sw / 2 + 0.22, stackTop = DOOR_Y + Math.max(1, payload.count) * (st + 0.12) + 0.6;
+    for (const s of [-1, 1]) frame.push(box(0.2, stackTop - (DOOR_Y - 1.2), 0.5, s * railX, (stackTop + DOOR_Y - 1.2) / 2, 0.2));
+    g.add(new THREE.Mesh(merge(frame), new THREE.MeshStandardMaterial({ color: 0x55585f, metalness: 0.7, roughness: 0.4, envMap: envTex })));
+    const pusher = new THREE.Mesh(new THREE.BoxGeometry(sw * 0.55, 0.22, 0.3), dark); g.add(pusher);
+    // Floodlights in the bay, on while the door is open
+    const bayLight = new THREE.PointLight(0xfff1dc, 0, 0.016, 1.6); bayLight.position.set(0, DOOR_Y + 1.6, -1.2); g.add(bayLight);
+    // The satellites themselves, flat in the stack (ship frame: x across the slot, z out of it)
+    const bay = [];
+    const satG = satGeometry(payload.type);
+    for (let i = 0; i < payload.count; i++) { const m = new THREE.Mesh(satG, satMats); g.add(m); bay.push(m); }
+    // Door: a curved panel cut from the hull, hinged along the slot's top edge, swinging outwards
+    const door = new THREE.Group();
+    door.position.set(0, y1, cz);
+    const dg = hull(y0, y1, Math.PI - half, 2 * half); dg.translate(0, -y1, -cz);
+    door.add(new THREE.Mesh(dg, mk(bodyMap, bodyMask, THREE.DoubleSide)));
+    g.add(door);
+
     const bells = [];
     for (const [x, z, vac] of SHIP_ENGINES) { const b = vac ? bell(1.15, 2.7) : bell(0.66, 1.35); b.translate(x, vac ? -1.9 : -0.9, z); bells.push(b); }
     g.add(new THREE.Mesh(merge(bells), nozMat));
     g.scale.setScalar(MM);
-    g.userData = { mats: [bodyMat, noseMat], h };
+    g.userData = { mats: [bodyMat, noseMat], h, door, flaps, bay, pusher, bayLight, pitch: st + 0.12, sd };
     return g;
+  }
+  // Dispenser and flaps at time t: door angle, stack height, which satellite is sliding out
+  function animateShip(shipG, t, TL, T, sats) {
+    const u = shipG.userData, when = sats.map(s => s.s.t0), n = when.length;
+    if (n) {
+      const open = ss(when[0] - SLIDE - 70, when[0] - SLIDE - 58, t) * (1 - ss(when[n - 1] + 20, when[n - 1] + 32, t));
+      u.door.rotation.x = 1.75 * open;
+      u.bayLight.intensity = 2.2 * open;
+      // Elevator: after each satellite leaves, the stack steps down one slot
+      let k = 0;
+      for (let j = 1; j < n; j++) k += ss(when[j - 1] + 3, when[j - 1] + 11, t);
+      let pz = u.sd / 2 + 0.2;
+      u.bay.forEach((m, j) => {
+        const slide = clamp((t - (when[j] - SLIDE)) / SLIDE, 0, 1);
+        m.visible = t < when[j];
+        m.position.set(0, DOOR_Y + (j - k) * u.pitch, -SLIDE_OUT * slide);
+        if (slide > 0 && slide < 1) pz = Math.max(-3.6, m.position.z + u.sd / 2 + 0.2);
+        else if (slide >= 1 && t < when[j] + 6) pz = Math.min(u.sd / 2 + 0.2, -3.6 + (t - when[j]) * 1.0); // pusher retracts
+      });
+      u.pusher.position.set(0, DOOR_Y, pz);
+    }
+    // Flaps: neutral on the way up, small corrections through entry, working hard in the belly
+    // flop, forward flaps folded away for the landing flip
+    const w = (a, f, ph) => a * Math.sin(t * f + ph);
+    let aft = 0.15, fwd = 0.15;
+    if (t > T.entry - 300 && t < (T.shipSubsonic || T.flip)) { aft = 0.12 + w(0.05, 0.9, 0); fwd = 0.18 + w(0.05, 0.7, 1); }
+    if (T.shipSubsonic && t >= T.shipSubsonic && t < T.flip) { aft = 0.3 + w(0.14, 1.4, 0); fwd = 0.25 + w(0.14, 1.1, 1.3); }
+    if (t >= T.flip) { const k = ss(T.flip, T.flip + 3, t); aft = 0.3 + 0.25 * k; fwd = 0.25 + 1.1 * k; }
+    for (const f of u.flaps.aft) f.rotation.y = f.userData.s * aft;
+    for (const f of u.flaps.fwd) f.rotation.y = f.userData.s * fwd;
   }
 
   // ─── Launch tower ("Mechazilla"), launch mount, tank farm ─────────────────
@@ -627,16 +728,15 @@ function StarshipLayer(o) {
       const pd = STARSHIP_PADS[id], P = Starship.ecefOf(pd.lat, pd.lon, 0);
       const pad = buildPad(); pad.P = mul(P, 1e-3); pad.id = id; pads.push(pad); scene.add(pad.g);
     }
-    booster = buildBooster(veh); ship = buildShip(veh);
+    booster = buildBooster(veh); ship = buildShip(veh, L.mission.payload);
     scene.add(booster, ship);
     if (F.ring) { ring = booster.userData.hsr.clone(); ring.scale.setScalar(MM); scene.add(ring); }
     bPl = buildPlumes(ENGINE_LAYOUT.map(([x, z]) => [x, z, 0]), false); sPl = buildPlumes(SHIP_ENGINES.map(([x, z, v]) => [x, z, v]), true);
     booster.add(bPl.g); bPl.g.scale.setScalar(1); ship.add(sPl.g); sPl.g.scale.setScalar(1);
     plasma = buildPlasma(); ship.add(plasma); plasma.scale.setScalar(1);
-    const satGeo = L.mission.payload.type === 'v3' ? new THREE.BoxGeometry(5.6, 0.35, 3.0) : new THREE.BoxGeometry(4.1, 0.3, 2.7);
-    const satMat = new THREE.MeshStandardMaterial({ color: 0x3b3e45, metalness: 0.7, roughness: 0.35, envMap: envTex });
+    const satGeo = satGeometry(L.mission.payload.type);
     for (const s of F.sats) {
-      const mesh = new THREE.Mesh(satGeo, satMat); mesh.scale.setScalar(MM); mesh.visible = false; scene.add(mesh);
+      const mesh = new THREE.Mesh(satGeo, satMats); mesh.scale.setScalar(MM); mesh.visible = false; scene.add(mesh);
       const [n, b] = F.shipFrame(s.t0);
       sats.push({ s, mesh, n, b });
     }
@@ -710,6 +810,7 @@ function StarshipLayer(o) {
     const sinking = (tl0, tt) => (tt > tl0 + 15 ? -6 * ss(tl0 + 15, tl0 + 60, tt) : 0);
     const bRel = place(booster, bst, bFrame, settle + (L.recovery !== 'catch' ? sinking(TL.land, t) : 0));
     const sRel = place(ship, sst, sFrame, sinking(F.t.landShip, t));
+    animateShip(ship, t, TL, F.t, sats);
     booster.userData.hsr.visible = !(F.ring && t > TL.hsj);
     ship.visible = true;
     if (ring) {
@@ -771,8 +872,9 @@ function StarshipLayer(o) {
       if (!on) continue;
       const st = s.s.track.at(t), r = rel(st.r);
       s.mesh.position.set(r[0], r[1], r[2]);
-      const a = (t - s.s.t0) * 0.02, n = norm(add(mul(s.n, Math.cos(a)), mul(s.b, Math.sin(a)))), b = norm(sub(s.b, mul(n, dot(s.b, n))));
-      setBasis(s.mesh, dirW(cross(n, b)), dirW(b), dirW(n));
+      // Leaves the slot flat, as it sat in the stack, then tumbles slowly about the slot's long axis
+      const X = cross(s.n, s.b), a = (t - s.s.t0) * 0.012, Y = norm(add(mul(s.n, Math.cos(a)), mul(s.b, Math.sin(a))));
+      setBasis(s.mesh, dirW(X), dirW(Y), dirW(cross(X, Y)));
     }
 
     // Path lines (past bright, future faint), drawn while the camera is not right on top of them
