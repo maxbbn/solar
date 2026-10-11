@@ -13,8 +13,14 @@ const Scene3D = (() => {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true, powerPreference: 'high-performance' });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setClearColor(0x000000, 1);
+  // Auto exposure is a plain gain through three's tone-mapping exposure (1 = unchanged); stars,
+  // orbit lines and other overlays sit on OVERLAY, keep their brightness and are not metered
+  renderer.toneMapping = THREE.LinearToneMapping;
+  const OVERLAY = 1;
+  const overlay = o => { o.layers.set(OVERLAY); o.material.toneMapped = false; return o; };
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(50, 1, 1e-5, 1e13);
+  camera.layers.enable(OVERLAY);
   const loader = new THREE.TextureLoader();
   const maxAniso = renderer.capabilities.getMaxAnisotropy();
   const tex = (key, wrap) => {
@@ -28,6 +34,7 @@ const Scene3D = (() => {
   const LOG_V = '#include <common>\n#include <logdepthbuf_pars_vertex>\n';
   const LOG_F = '#include <common>\n#include <logdepthbuf_pars_fragment>\n';
   const STAR_R = 1e11;
+  let starLayer = null; // Starship layer, created once the labels exist
 
   // ─── Shared uniforms ──────────────────────────────────────────────────────
   const SUN_U = { value: new THREE.Vector3() };
@@ -245,6 +252,7 @@ const Scene3D = (() => {
         if (hasNight > 0.5 && nf > 0.0) col += cityLight(lightsOf(texture2D(night, vUv + vec2(cloudRot / (2.0 * PI), 0.0)).rgb)) * 0.45 * nf * mix(0.15, 1.0, nightAdapt);
       }
       gl_FragColor = vec4(col, alpha);
+      #include <tonemapping_fragment>
     }`;
 
   function planetMaterial(o) {
@@ -313,6 +321,7 @@ const Scene3D = (() => {
       // Night side: the thin green airglow line (oxygen emission ~100 km up) seen along the limb
       vec3 glow = vec3(0.32, 1.0, 0.5) * pow(rim, power * 3.0) * (1.0 - lit) * airglow;
       gl_FragColor = vec4(tint * rim * lit * 1.4 + glow, 1.0);
+      #include <tonemapping_fragment>
     }`;
   const ATMO_VS = LOG_V + `
     varying vec3 vN; varying vec3 vP;
@@ -359,6 +368,7 @@ const Scene3D = (() => {
           float shadow = (bq < 0.0 && bq * bq - cq > 0.0) ? 0.06 : 1.0;
           float lit = 0.3 + 0.7 * abs(dot(normalize(nrm), L));
           gl_FragColor = vec4(c.rgb * lit * shadow, c.a * 0.95);
+          #include <tonemapping_fragment>
         }`,
       transparent: true, depthWrite: false, side: THREE.DoubleSide, extensions: { fragDepth: true },
     });
@@ -377,9 +387,9 @@ const Scene3D = (() => {
     return t;
   }
   const glowTex = glowTexture([[0, 'rgba(255,250,235,1)'], [0.12, 'rgba(255,236,190,0.9)'], [0.3, 'rgba(255,190,110,0.28)'], [0.6, 'rgba(255,150,70,0.07)'], [1, 'rgba(255,140,60,0)']]);
-  const sunGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+  const sunGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, toneMapped: false }));
   scene.add(sunGlow);
-  const sunHalo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.35 }));
+  const sunHalo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.35, toneMapped: false }));
   scene.add(sunHalo);
 
   // ─── Stars & constellations ─────────────────────────────────────────────
@@ -423,7 +433,7 @@ const Scene3D = (() => {
     }));
     stars.renderOrder = -10;
     stars.frustumCulled = false;
-    scene.add(stars);
+    scene.add(overlay(stars));
   }
   let constLines;
   {
@@ -438,7 +448,7 @@ const Scene3D = (() => {
     constLines.renderOrder = -9;
     constLines.frustumCulled = false;
     constLines.visible = false;
-    scene.add(constLines);
+    scene.add(overlay(constLines));
   }
   const constNames = ((window.SKY && window.SKY.names) || []).map(([zh, en, ra, dec]) => ({ zh, en, v: raDecToVec(ra * DEG, dec * DEG) }));
 
@@ -468,6 +478,7 @@ const Scene3D = (() => {
         float glare = (pow(max(mu, 0.0), 3000.0) * 0.5 + pow(max(mu, 0.0), 60.0) * 0.16 + pow(max(mu, 0.0), 6.0) * 0.08) * smoothstep(-0.08, 0.04, sh);
         vec3 col = (base + vec3(1.0, 0.92, 0.8) * glare) * vis + hor * 0.035 * hz * (1.0 - day);
         gl_FragColor = vec4(col, 1.0);
+        #include <tonemapping_fragment>
       }`,
     side: THREE.BackSide, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, extensions: { fragDepth: true },
   }));
@@ -495,6 +506,7 @@ const Scene3D = (() => {
         float d = length(vP);
         c = mix(c, fogCol, fogAmt * (1.0 - exp(-d / 25.0)));
         gl_FragColor = vec4(c, 1.0);
+        #include <tonemapping_fragment>
       }`,
     extensions: { fragDepth: true },
   }));
@@ -513,7 +525,7 @@ const Scene3D = (() => {
       this.line = new THREE.Line(this.geo, this.mat);
       this.line.frustumCulled = false;
       this.base = opacity;
-      scene.add(this.line);
+      scene.add(overlay(this.line));
     }
     set(points) {
       for (let i = 0; i < this.n; i++) { const p = points[Math.min(i, points.length - 1)]; this.arr[i * 3] = p[0]; this.arr[i * 3 + 1] = p[1]; this.arr[i * 3 + 2] = p[2]; }
@@ -555,10 +567,10 @@ const Scene3D = (() => {
       craft.add(fin);
     }
   }
-  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.0017, 0.02, 20, 1, true), new THREE.MeshBasicMaterial({ color: 0xffb35c, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }));
+  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.0017, 0.02, 20, 1, true), new THREE.MeshBasicMaterial({ color: 0xffb35c, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
   flame.position.y = -0.012; flame.rotation.x = Math.PI;
   craft.add(flame);
-  const plume = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffc27a, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+  const plume = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xffc27a, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, toneMapped: false }));
   scene.add(plume);
   craft.visible = false; plume.visible = false;
   scene.add(craft);
@@ -577,7 +589,8 @@ const Scene3D = (() => {
   function setMission(m) {
     for (const p of missionPieces) { scene.remove(p.past.line, p.future.line); }
     missionPieces = [];
-    if (!m) return;
+    if (starLayer) starLayer.setFlight(m && m.kind === 'starship' ? m : null);
+    if (!m || m.kind === 'starship') return;
     for (const piece of m.paths) {
       const times = sampleTimes(m, piece);
       const pts = times.map(t => V3.sub(m.pos(t), bodyPos(piece.frame, t)));
@@ -671,8 +684,11 @@ const Scene3D = (() => {
     const dirs = tr('北,东北,东,东南,南,西南,西,西北', 'N,NE,E,SE,S,SW,W,NW').split(',');
     compass.forEach((c, i) => { c.el.textContent = dirs[i]; });
     constNames.forEach((c, i) => { constEls[i].textContent = tr(c.zh, c.en); });
+    if (starLayer) starLayer.relabel();
   }
   relabel();
+  // Starship: vehicles, launch tower, Starbase coast, plumes and steam (js/starship-scene.js)
+  starLayer = typeof StarshipLayer === 'function' ? StarshipLayer({ scene, renderer, labelLayer, LOG_V, LOG_F, project, camera, overlay }) : null;
 
   const tmpV = new THREE.Vector3(), tmpM = new THREE.Matrix4();
   let W = 1, H = 1;
@@ -704,6 +720,7 @@ const Scene3D = (() => {
     camera.updateMatrixWorld();
     const pxPerRad = H / 2 / Math.tan(fov * DEG / 2);
     PXRAD_U.value = 1 / pxPerRad;
+    if (starLayer) starLayer.update(ctx);
 
     const sunRel = rel(pos.sun);
     SUN_U.value.set(sunRel[0], sunRel[1], sunRel[2]);
@@ -780,7 +797,7 @@ const Scene3D = (() => {
     // skyOnly: flying low through Earth's atmosphere (nose camera), sky without ground
     const skyEnv = surface || ctx.skyOnly;
     skyDome.visible = !!(skyEnv && SKY_STYLE[skyEnv.body].zen);
-    ground.visible = !!surface;
+    ground.visible = !!surface && !(starLayer && starLayer.groundCovers);
     if (ctx.skyOnly && !surface) {
       const st = SKY_STYLE[ctx.skyOnly.body], sd = V3.norm(sunRel), up = ctx.skyOnly.up;
       skyU.sunDir.value.set(sd[0], sd[1], sd[2]);
@@ -856,7 +873,8 @@ const Scene3D = (() => {
     ambient.intensity = 0.25 + 0.35 * ctx.localSunVis;
 
     // Mission
-    craft.visible = plume.visible = !!mission;
+    const probe = mission && mission.kind !== 'starship' ? mission : null;
+    craft.visible = plume.visible = !!probe;
     for (const p of missionPieces) {
       const fr = rel(pos[p.piece.frame] || bodyPos(p.piece.frame, jd));
       let k = 0, lo = 0, hi = p.times.length - 1;
@@ -880,7 +898,7 @@ const Scene3D = (() => {
       fillPath(p.past, p.pts, 0, k, fr, craftRel, false);
       fillPath(p.future, p.pts, Math.max(0, k - (inside ? 0 : 1)), p.pts.length, fr, craftRel, true);
     }
-    if (mission && craftPos) {
+    if (probe && craftPos) {
       const r = rel(craftPos);
       craft.position.set(r[0], r[1], r[2]);
       const att = ctx.craftAttitude;
@@ -896,7 +914,7 @@ const Scene3D = (() => {
     }
 
     // Light pulses
-    while (pulseMeshes.length < pulses.length) { const m = new THREE.Mesh(pulseGeo, pulseMat); m.frustumCulled = false; scene.add(m); pulseMeshes.push(m); }
+    while (pulseMeshes.length < pulses.length) { const m = new THREE.Mesh(pulseGeo, pulseMat); m.frustumCulled = false; scene.add(overlay(m)); pulseMeshes.push(m); }
     pulseMeshes.forEach((m, i) => {
       const p = pulses[i];
       m.visible = !!p && p.radius > 0;
@@ -906,8 +924,82 @@ const Scene3D = (() => {
       m.scale.setScalar(p.radius);
     });
 
+    if (toggles.exposure) {
+      // The Sun, or the lit face of a distant body shown as a disc (a crescent Moon), in the frame
+      // sets a daylight exposure however few metered pixels it covers. Bodies the camera is close
+      // to fill enough of the frame to be metered.
+      const inView = id => {
+        const r = rel(pos[id]), d = V3.len(r), u = V3.mul(r, 1 / d), sp = project(r);
+        if (!sp || sp[0] < -20 || sp[0] > W + 20 || sp[1] < -20 || sp[1] > H + 20) return false;
+        if (surface && V3.dot(u, surface.up) < -0.01) return false;
+        for (const b of BODIES) {
+          if (b.id === id || b.radius < 1000 || (surface && surface.body === b.id)) continue;
+          const ro = rel(pos[b.id]), t = V3.dot(ro, u);
+          if (t > 0 && t < d && V3.dot(ro, ro) - t * t < b.radius * b.radius) return false;
+        }
+        return true;
+      };
+      let bright = inView('sun');
+      for (const b of BODIES) {
+        if (bright) break;
+        if (b.id === 'sun' || (surface && surface.body === b.id)) continue;
+        const r = rel(pos[b.id]), d = V3.len(r), px = b.radius / d * pxPerRad;
+        if (px < 1.5 || d < b.radius * 3) continue;
+        let lit = (1 + V3.dot(V3.norm(V3.sub(pos.sun, pos[b.id])), V3.mul(r, -1 / d))) / 2; // phase: lit fraction of the disc
+        if (b.id === 'moon') lit *= sunVisibleFraction(pos.moon, pos.sun, pos.earth, BODY.earth.radius * 1.02); // eclipsed Moon is dim
+        if (lit * px * px >= 1 && inView(b.id)) bright = true;
+      }
+      autoExpose(true, bright);
+    } else autoExpose(false);
     renderer.render(scene, camera);
     updateLabels(ctx, rel, pxPerRad);
+  }
+
+  // ─── Auto exposure ──────────────────────────────────────────────────────
+  // Like eyes adapting to the dark: every few frames a tiny copy of the view (overlays left
+  // out) is metered. With nothing bright in view the gain rises until the scene averages KEY;
+  // the brightest few percent may not pass WHITE, so anything sunlit in view holds it near 1.
+  // Opening up is slow, stopping down after a bright thing appears is quick.
+  const AE = { E: 1, target: 1, n: 0, t: 0 };
+  const KEY = 0.07, WHITE = 0.85, E_MAX = 64, AE_EVERY = 5;
+  const MW = 64, MH = 36;
+  // Float target where it can be read back; otherwise bytes, metered with a fixed gain so the
+  // dark end still resolves, and anything clipping there counts as bright
+  const floatMeter = renderer.capabilities.isWebGL2 && renderer.extensions.has('EXT_color_buffer_float');
+  const METER_GAIN = floatMeter ? 1 : 16;
+  const meterRT = new THREE.WebGLRenderTarget(MW, MH, { type: floatMeter ? THREE.FloatType : THREE.UnsignedByteType });
+  const meterBuf = floatMeter ? new Float32Array(MW * MH * 4) : new Uint8Array(MW * MH * 4);
+  const meterL = new Float32Array(MW * MH);
+  function meter() {
+    renderer.toneMappingExposure = METER_GAIN;
+    camera.layers.disable(OVERLAY);
+    renderer.setRenderTarget(meterRT);
+    renderer.render(scene, camera);
+    renderer.setRenderTarget(null);
+    camera.layers.enable(OVERLAY);
+    renderer.readRenderTargetPixels(meterRT, 0, 0, MW, MH, meterBuf);
+    const k = floatMeter ? 1 : 1 / 255 / METER_GAIN;
+    let n = 0, sum = 0, clipped = 0;
+    for (let i = 0; i < MW * MH; i++) {
+      const r = meterBuf[i * 4], g = meterBuf[i * 4 + 1], b = meterBuf[i * 4 + 2];
+      if (!floatMeter && Math.max(r, g, b) >= 254) clipped++;
+      const l = (0.2126 * r + 0.7152 * g + 0.0722 * b) * k;
+      if (l > 2e-4) { meterL[n++] = l; sum += l; }
+    }
+    // Next to nothing in view (empty space, stars only): no reason to open up
+    if (n < MW * MH * 0.01 || clipped > MW * MH * 0.02) return 1;
+    const lit = meterL.subarray(0, n).sort(), hi = lit[Math.floor(0.98 * (n - 1))];
+    return Math.min(Math.max(1, KEY / (sum / n)), E_MAX, Math.max(1, WHITE / hi));
+  }
+  function autoExpose(on, bright) {
+    const now = performance.now(), dt = Math.min(0.25, (now - (AE.t || now)) / 1000);
+    AE.t = now;
+    if (!on) { AE.E = AE.target = 1; AE.n = 0; renderer.toneMappingExposure = 1; return; }
+    if (bright) { AE.target = 1; AE.n = 0; }
+    else if (AE.n++ % AE_EVERY === 0) AE.target = meter();
+    const tau = AE.target > AE.E ? 1.6 : 0.3;
+    AE.E = Math.exp(Math.log(AE.E) + (Math.log(AE.target) - Math.log(AE.E)) * (1 - Math.exp(-dt / tau)));
+    renderer.toneMappingExposure = AE.E;
   }
 
   // ─── Labels ─────────────────────────────────────────────────────────────
@@ -925,7 +1017,7 @@ const Scene3D = (() => {
       const L = labels[id];
       let show = toggles.labels;
       let r, radius = 0;
-      if (id === 'craft') { show = !!(mission && craftPos) && ctx.cockpit !== 'rocket'; if (show) r = rel(craftPos); }
+      if (id === 'craft') { show = !!(mission && craftPos) && mission.kind !== 'starship' && ctx.cockpit !== 'rocket'; if (show) r = rel(craftPos); }
       else if (id === 'iss') { show = toggles.labels && ctx.cockpit !== 'iss'; r = rel(ctx.issPos); radius = 0.055; }
       else { radius = BODY[id].radius; r = rel(pos[id]); if (surface && surface.body === id) show = false; }
       let sp = null, d = 0;
@@ -933,6 +1025,8 @@ const Scene3D = (() => {
         d = V3.len(r);
         sp = project(r);
         if (!sp) show = false;
+        // Right down at a body's surface its centre label just floats in the ground: drop it
+        if (radius > 1000 && d - radius < radius * 0.02) show = false;
       }
       if (show) {
         const u = V3.mul(r, 1 / d);
@@ -988,5 +1082,5 @@ const Scene3D = (() => {
     });
   }
 
-  return { update, setMission, labelLayer, project, relabel, get size() { return [W, H]; }, camera, renderer };
+  return { update, setMission, labelLayer, project, relabel, get size() { return [W, H]; }, get exposure() { return AE.E; }, camera, renderer };
 })();

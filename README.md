@@ -10,9 +10,10 @@ A true-scale solar system simulator with real-time ephemerides, running entirely
 - Views: orbit in space, or stand on the surface of Earth, the Moon or Mars, with true apparent diameters and telescope zoom
 - Time: from real time up to 1 year per second, run backwards, jump to any date, automatically find the next solar or lunar eclipse
 - Missions: Earth–Moon transfer (patched conics) and transfers to Mars, Venus and Jupiter (Lambert solver + launch-window Δv porkchop plot), all analytic functions of time, so you can fast-forward or rewind freely
+- Starship: replay real test flights from Starbase (Flight 8's tower catch, Flight 10's Starlink-simulator deploy, Flight 14's first orbit with 26 Starlink V3 satellites) with the tower and chopsticks, launch mount, hot staging, boostback, booster catch or Gulf splashdown, payload deploy, in-space relight, re-entry plasma, belly flop, landing flip and splashdown. Trajectories come from a 3-DOF physics simulation (Raptor thrust vs. ambient pressure, US76 drag, J2 gravity, Earth's rotation) solved to hit SpaceX's published timelines; ground tracking camera, chase and onboard cameras, webcast-style telemetry
 - International Space Station: real TLE orbit (with J2 precession and drag terms), procedural model with sun-tracking solar arrays, follow view, Cupola window view, and visible-pass predictions for "waiting for the ISS" from the ground
 - Speed of light demo: send a beam of light from any body and see how long it takes to reach the other planets
-- Interface: by default only the scene, the clock and the time bar are shown; the left navigation opens the Views / Bodies / Missions panels, the right toolbar holds the labels, orbits and constellations toggles, immersive mode (I key, Esc to exit) and settings (language, shortcuts, credits)
+- Interface: by default only the scene, the clock and the time bar are shown; the left navigation opens the Views / Bodies / Missions panels, the right toolbar holds the labels, orbits, constellations and auto-exposure toggles (auto exposure is on by default: with nothing bright in view the picture slowly opens up, like eyes adjusting to the dark, by up to 6 stops, and drops back at once when the Sun or a sunlit surface comes into view), immersive mode (I key, Esc to exit) and settings (language, shortcuts, credits)
 - Chinese and English: follows the browser language by default (and switches live when it changes), or pick one manually at the top left; UI strings are written in pairs as `tr(中文, English)` (`tr` is defined in `js/i18n.js`), and switching needs no reload
 
 ## Running
@@ -23,7 +24,7 @@ Just double-click `index.html`, or:
 python3 -m http.server 8765   # then open http://localhost:8765
 ```
 
-Deep links: `#onEarth` `#onMoon` `#onMars` `#inner` `#outer` `#saturnBack` `#eclipse-solar` `#eclipse-lunar` `#mission-moon` `#mission-mars` `#cockpit-moon` (launch the lunar mission and enter the cockpit view) `#iss` `#cupola`
+Deep links: `#onEarth` `#onMoon` `#onMars` `#inner` `#outer` `#saturnBack` `#eclipse-solar` `#eclipse-lunar` `#mission-moon` `#mission-mars` `#cockpit-moon` (launch the lunar mission and enter the cockpit view) `#iss` `#cupola` `#starship` `#starship-flight10` `#starship-flight14` (a moment and a camera: `#starship-flight8catch@414:tower`; cameras `pad` `tower` `chase-ship` `chase-booster` `cam-ship` `cam-booster` `overview`)
 
 ## Building
 
@@ -43,10 +44,19 @@ npm run preview   # builds, then serves dist/ at http://localhost:8766
 - `js/iss.js` ISS orbit, pass predictions and model (to update the orbit, replace `ISS_TLE` at the top of the file; get it from celestrak.org)
 - `js/astro.js` ephemerides, body data, eclipse search
 - `js/missions.js` orbital mechanics (universal-variable Kepler propagation, Lambert, mission design)
+- `js/starship-data.js` Starship vehicles, pads and the flight catalog (add a flight here: see below)
+- `js/starship.js` Starship flight physics and guidance, flight timeline and events
+- `js/starship-scene.js` Starship models, launch tower, Starbase coast, plumes, steam, plasma
 - `js/tiles.js` streams NASA GIBS imagery (Blue Marble, VIIRS night lights, land/water mask) around the camera when it is close to Earth; offline it falls back to the built-in maps
 - `js/scene.js` rendering (floating origin + logarithmic depth buffer, for true scale from meters to AU)
 - `js/app.js` camera, time, UI
 - `assets/` packed textures and star catalog (generated from `tex_src/` by `tools/build_data.py`; the Moon's colour and normal maps come from `tools/build_moon.py`)
+
+## Adding a Starship flight
+
+Each flight is one entry in `STARSHIP_MISSIONS` (`js/starship-data.js`): vehicle block, booster/ship serials, pad, launch azimuth, payload, booster recovery (`catch` or `gulf`), ship profile (`suborbital`, or `orbital` with insertion and deorbit burn times) and the timeline in seconds after liftoff (MECO, staging, boostback, landing burn, SECO, deploy window, optional relight). `Starship.plan` solves the pitch programme, throttle, boostback aim and ship steering to hit those times, then flies everything else with physics, so a new flight shows up in the Mission panel's Starship tab with no other code. New vehicle versions go in `STARSHIP_VEHICLES` and `RAPTORS`.
+
+Starship timelines: SpaceX flight pages and webcasts (Flights 8, 10 and 14; Flight 14 insertion/deorbit times are estimates from press reports).
 
 Textures © Solar System Scope, CC BY 4.0; Moon colour and relief from the NASA SVS CGI Moon Kit (LRO LROC/LOLA); close-up Earth imagery from NASA GIBS (Blue Marble Next Generation, VIIRS Black Marble) and OpenStreetMap land/water data (© OpenStreetMap contributors, ODbL); star catalog and constellation lines from d3-celestial (BSD-3).
  
