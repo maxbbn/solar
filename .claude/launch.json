@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "solar",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "exec python3 -m http.server \"${PORT:-8765}\""],
+      "port": 8765,
+      "autoPort": true
+    },
+    {
+      "name": "solar-dist",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "node tools/build.mjs && exec python3 -m http.server \"${PORT:-8766}\" -d dist"],
+      "port": 8766,
+      "autoPort": true
+    }
+  ]
+}
