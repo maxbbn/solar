@@ -54,7 +54,7 @@
     vehicle: 'rocket',
     cs: null,
     trans: null, last: null,
-    toggles: { labels: true, orbits: true, constellations: false },
+    toggles: { labels: true, orbits: true, constellations: false, exposure: true },
     mission: null, autoPace: true,
     plan: { target: 'moon', site: LAUNCH_SITES[0], result: null, pork: null, pick: null },
     tab: 'probe', star: { id: 'flight8catch', recovery: null, when: 'history' }, starView: null, autoFov: false,
@@ -612,7 +612,7 @@
   });
 
   // Layer toggles: always-visible icon buttons
-  const TOGGLES = [['tLabels', 'labels', 'l', ['标签', 'Labels']], ['tOrbits', 'orbits', 'o', ['轨道与航线', 'Orbits & paths']], ['tConst', 'constellations', 'c', ['星座', 'Constellations']]];
+  const TOGGLES = [['tLabels', 'labels', 'l', ['标签', 'Labels']], ['tOrbits', 'orbits', 'o', ['轨道与航线', 'Orbits & paths']], ['tConst', 'constellations', 'c', ['星座', 'Constellations']], ['tExpo', 'exposure', 'e', ['自动曝光', 'Auto exposure']]];
   function setToggle(key, on) {
     S.toggles[key] = on;
     const t = TOGGLES.find(x => x[1] === key);
@@ -1337,6 +1337,8 @@
       renderInfo(pos, cam);
       updateMissionHud(pos);
       updateStarTelemetry();
+      const ev = Math.log2(Scene3D.exposure);
+      $('expoEv').textContent = ev >= 0.25 ? '+' + ev.toFixed(1) : '';
     }
     placePrograde(cam);
     if (first) { first = false; $('loading').classList.add('gone'); setTimeout(() => $('loading').remove(), 800); }

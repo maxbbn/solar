@@ -5,7 +5,7 @@
 // Models are built in metres and drawn at true scale (km), camera-relative like everything else.
 // Created by Scene3D; update() runs every frame before the scene is rendered.
 function StarshipLayer(o) {
-  const { scene, renderer, labelLayer, LOG_V, LOG_F, project } = o;
+  const { scene, renderer, labelLayer, LOG_V, LOG_F, project, overlay = x => x } = o;
   const MM = 0.001; // metres → km
   const { add, sub, mul, dot, cross } = V3;
   const len = a => Math.sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
@@ -508,6 +508,7 @@ function StarshipLayer(o) {
       col = mix(col, hor * day * mix(0.95, 0.45, smoothstep(2.0, 30.0, camH)) + vec3(0.01, 0.012, 0.02), 1.0 - exp(-d / vis));
       float a = fade * (1.0 - smoothstep(620.0, 810.0, r));
       gl_FragColor = vec4(col, a);
+      #include <tonemapping_fragment>
     }`;
   function makeGround(mode) {
     const u = { sunDir: { value: new THREE.Vector3() }, sunVis: { value: 1 }, mode: { value: mode }, fade: { value: 1 }, hor: { value: new THREE.Vector3() }, day: { value: 1 },
@@ -621,6 +622,7 @@ function StarshipLayer(o) {
         float l = clamp(dot(N, sunV) * 0.55 + 0.45, 0.0, 1.0);
         vec3 col = mix(shade, lit, l) * (0.85 + 0.3 * n) + flame * vDat.z * (1.2 - r);
         gl_FragColor = vec4(col, dens * vDat.y);
+        #include <tonemapping_fragment>
       }`,
     transparent: true, depthWrite: false, extensions: { fragDepth: true },
   }));
@@ -713,7 +715,7 @@ function StarshipLayer(o) {
     const mk = (c, op) => {
       const geo = new THREE.BufferGeometry(), arr = new Float32Array(n * 3);
       geo.setAttribute('position', new THREE.BufferAttribute(arr, 3).setUsage(THREE.DynamicDrawUsage));
-      const line = new THREE.Line(geo, trackMat(c, op)); line.frustumCulled = false; scene.add(line);
+      const line = new THREE.Line(geo, trackMat(c, op)); line.frustumCulled = false; scene.add(overlay(line));
       return line;
     };
     return { path, past: mk(color, 0.9), future: mk(0x72a7ff, 0.45) };
